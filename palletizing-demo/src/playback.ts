@@ -30,7 +30,8 @@ export async function stepForward(): Promise<boolean> {
   const my = epoch
   await Promise.all(vs.map((v) => v.animateNext(duration())))
   if (my !== epoch) return false
-  state.step = Math.min(...vs.map((v) => v.currentStep))
+  // 对照算法可能少放几件：以放得最多的视图为准
+  state.step = Math.min(totalSteps.value, Math.max(...vs.map((v) => v.currentStep)))
   return true
 }
 

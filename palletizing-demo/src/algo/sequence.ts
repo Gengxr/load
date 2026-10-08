@@ -9,7 +9,7 @@
  *   · 层超前约束：最多允许超前最低未完成层 layerLead 层（0 = 严格逐层）。
  * 方法：束搜索（beam search）。状态 = 已放集合，按增量重心 O(1) 评估扩展，Zobrist 哈希去重。
  *
- * 对照基线：传统"逐层、由远及近、从左到右"的行扫描顺序。
+ * 对照基线："逐层、由远及近、从左到右"的行扫描顺序（自定义的基线，反映常见人工习惯，不是某项标准）。
  */
 import type { Constraints, PalletSpec, Placement, SequenceParams, SequenceResult, SequenceStrategy, SequenceSummary, StepSeries } from './types'
 import { enclosedSides, type Precedence } from './precedence'
@@ -27,7 +27,12 @@ interface Env {
   tare: number
   baseX: number
   baseY: number
+  /** 起步阶段的货重门槛 kg：盘上货物累计不足这个重量的步不计入峰值 */
+  warm: number
 }
+
+/** 起步阶段：盘上货物不足整盘货重的这个比例 */
+export const WARMUP_RATIO = 0.2
 
 function makeEnv(pl: Placement[], prec: Precedence, pallet: PalletSpec, cons: Constraints): Env {
   const n = pl.length
@@ -54,6 +59,7 @@ function makeEnv(pl: Placement[], prec: Precedence, pallet: PalletSpec, cons: Co
     tare: pallet.tareWeight,
     baseX: cons.cogOffsetBase === 'pallet' ? pallet.length : cons.footprintX,
     baseY: cons.cogOffsetBase === 'pallet' ? pallet.width : cons.footprintY,
+    warm: WARMUP_RATIO * pl.reduce((s, p) => s + p.weight, 0) - 1e-6,
   }
 }
 
@@ -174,7 +180,8 @@ export function balanceOrder(env: Env, params: SequenceParams): number[] {
         const ex = Math.abs((s.mx + env.w[i] * env.cx[i]) / M) / env.baseX
         const ey = Math.abs((s.my + env.w[i] * env.cy[i]) / M) / env.baseY
         const e = Math.max(ex, ey)
-        const peak = Math.max(s.peak, e)
+        // 起步阶段只计入平均值，不计入峰值
+        const peak = s.mass + env.w[i] >= env.warm ? Math.max(s.peak, e) : s.peak
         const sum = s.sum + e
         const enc = enclosedSides(i, pl, prec, isPlaced)
         // 前瞻：放下 i 之后，是否把某个尚未放置的邻居围成四面封闭的"孔位"
@@ -309,16 +316,22 @@ export function computeSteps(env: Env, order: number[], cons: Constraints, palle
     if (jump) jumps++
   }
   const r = steps.ratio.slice(1)
-  let peakStep = 0
+  // 起步阶段：盘上货物累计重量不足整盘的 10%
+  let warmupSteps = 0
+  while (warmupSteps < n - 1 && steps.mass[warmupSteps + 1] - env.tare < env.warm) warmupSteps++
+  const counted = r.slice(warmupSteps)
+  let peakStep = warmupSteps
   r.forEach((v, k) => {
-    if (v > r[peakStep]) peakStep = k
+    if (k >= warmupSteps && v > r[peakStep]) peakStep = k
   })
   const summary: SequenceSummary = {
-    peakRatio: r.length ? Math.max(...r) : 0,
+    peakRatio: counted.length ? Math.max(...counted) : 0,
+    warmupSteps,
+    warmupPeak: warmupSteps ? Math.max(...r.slice(0, warmupSteps)) : 0,
     meanRatio: r.length ? r.reduce((a, b) => a + b, 0) / r.length : 0,
     peakStep: peakStep + 1,
     peakMoment: Math.max(0, ...steps.moment),
-    exceedSteps: r.filter((v) => v > cons.cogOffsetRatioMax + 1e-9).length,
+    exceedSteps: counted.filter((v) => v > cons.cogOffsetRatioMax + 1e-9).length,
     holes,
     travel,
     layerJumps: jumps,
@@ -338,6 +351,14 @@ export function planSequence(
   const t0 = performance.now()
   const env = makeEnv(pl, prec, pallet, cons)
   const order = strategy === 'balance' ? balanceOrder(env, params) : baselineOrder(pl, prec)
+  const { steps, summary } = computeSteps(env, order, cons, pallet.height)
+  return { strategy, order, steps, summary, elapsedMs: performance.now() - t0 }
+}
+
+/** 按给定顺序核算逐步状态（用于对照算法：顺序由对照算法自己决定） */
+export function evalOrder(strategy: SequenceStrategy, order: number[], pl: Placement[], prec: Precedence, pallet: PalletSpec, cons: Constraints): SequenceResult {
+  const t0 = performance.now()
+  const env = makeEnv(pl, prec, pallet, cons)
   const { steps, summary } = computeSteps(env, order, cons, pallet.height)
   return { strategy, order, steps, summary, elapsedMs: performance.now() - t0 }
 }

@@ -4,6 +4,8 @@ import { ORDER_PRESETS, allCargos, importOrder, newOrderAndRun, order, rerollSee
 import { FIG21_PATTERNS } from '../algo/generator'
 import { flattenImported, orderPayload, parseCargoJson } from '../algo/io'
 import { download } from '../persist'
+import { KIND_NAME, type CargoKind } from '../algo/types'
+import { KIND_COLOR } from '../viz/palette'
 import Icon from './Icon.vue'
 
 /** 出库分盘 · 左侧面板：出库清单的来源（模拟生成 / 导入）与货物构成 */
@@ -39,16 +41,19 @@ function exportOrder() {
 }
 
 const skuRows = computed(() => {
-  const m = new Map<string, { sku: string; l: number; w: number; h: number; n: number; kg: number }>()
+  const m = new Map<string, { sku: string; l: number; w: number; h: number; n: number; kg: number; kind: CargoKind; name: string; cap?: number; fragile: boolean }>()
   for (const c of allCargos.value) {
     const r = m.get(c.sku)
     if (r) {
       r.n++
       r.kg += c.weight
-    } else m.set(c.sku, { sku: c.sku, l: c.length, w: c.width, h: c.height, n: 1, kg: c.weight })
+    } else m.set(c.sku, { sku: c.sku, l: c.length, w: c.width, h: c.height, n: 1, kg: c.weight, kind: c.kind ?? 'carton', name: c.name ?? '', cap: c.maxLoad, fragile: !!c.fragile })
   }
   return [...m.values()].sort((a, b) => b.n - a.n)
 })
+const kinds = computed(() =>
+  (['carton', 'wood', 'case'] as CargoKind[]).map((k) => ({ k, name: KIND_NAME[k], n: allCargos.value.filter((c) => (c.kind ?? 'carton') === k).length })).filter((x) => x.n > 0),
+)
 const maxN = computed(() => Math.max(1, ...skuRows.value.map((r) => r.n)))
 const totals = computed(() => {
   const list = allCargos.value
@@ -103,11 +108,16 @@ const totals = computed(() => {
         <div class="st"><b class="num">{{ totals.v.toFixed(2) }}</b><span>m³</span></div>
       </div>
 
+      <div v-if="kinds.length" class="kinds num" title="货物包装类型：决定外观、承压能力和机械臂的抓取方式">
+        <span v-for="x in kinds" :key="x.k"><i :style="{ background: KIND_COLOR[x.k] }" />{{ x.name }} <b>{{ x.n }}</b></span>
+      </div>
+
       <div class="list">
-        <div v-for="r in skuRows" :key="r.sku" class="sku">
+        <div v-for="r in skuRows" :key="r.sku" class="sku" :title="`${KIND_NAME[r.kind]}${r.name ? ' · ' + r.name : ''}：单件承压上限 ${r.cap ?? '不限'} kg${r.fragile ? '（怕压）' : ''}`">
           <i class="sw" :style="{ background: skuColors.get(r.sku) }" />
           <div class="sk-m">
-            <div class="sk-d num">{{ r.l }} × {{ r.w }} × {{ r.h }}</div>
+            <div class="sk-n"><b>{{ r.name || KIND_NAME[r.kind] }}</b><em :class="r.kind">{{ r.kind === 'case' ? '特种箱' : KIND_NAME[r.kind] }}</em><em v-if="r.fragile" class="frag">怕压</em></div>
+            <div class="sk-d num">{{ r.l }} × {{ r.w }} × {{ r.h }}<span v-if="r.cap !== undefined"> · 承压 {{ r.cap }} kg</span></div>
             <div class="sk-bar"><span :style="{ width: (r.n / maxN) * 100 + '%', background: skuColors.get(r.sku) }" /></div>
           </div>
           <div class="sk-r num">
@@ -254,9 +264,66 @@ const totals = computed(() => {
   flex: 1;
   min-width: 0;
 }
-.sk-d {
+.kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 0 2px;
+}
+.kinds span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kinds i {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+.kinds b {
+  color: var(--text);
+  font-weight: 650;
+}
+.sk-n {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12.5px;
-  font-weight: 550;
+  min-width: 0;
+}
+.sk-n b {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sk-n em {
+  flex: none;
+  font-style: normal;
+  font-size: 10.5px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: #e9d3b4;
+  background: rgba(216, 180, 138, 0.16);
+}
+.sk-n em.wood {
+  color: #e2b07c;
+  background: rgba(185, 130, 77, 0.22);
+}
+.sk-n em.case {
+  color: #b7c99a;
+  background: rgba(111, 130, 86, 0.28);
+}
+.sk-n em.frag {
+  color: #ffc24b;
+  background: rgba(255, 194, 75, 0.14);
+}
+.sk-d {
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin-top: 1px;
 }
 .sk-bar {
   height: 3px;

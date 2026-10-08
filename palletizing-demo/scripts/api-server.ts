@@ -11,7 +11,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { DEFAULT_CONSTRAINTS, DEFAULT_PALLET, DEFAULT_SEQUENCE } from '../src/algo/defaults'
 import { CABIN_CONFIGS, planLoading } from '../src/algo/cabin'
-import { flattenImported, loadingPayload, palletizingPayload, parseCabinConfig, parseCargoJson, parsePalletUnits } from '../src/algo/io'
+import { robotPayload, flattenImported, loadingPayload, palletizingPayload, parseCabinConfig, parseCargoJson, parsePalletUnits } from '../src/algo/io'
 import { planOrder, toPalletUnit, type PlanMany } from '../src/algo/pipeline'
 import { planPallet } from '../src/algo/planner'
 
@@ -50,7 +50,7 @@ createServer(async (req, res) => {
   const requestId = (req.headers['x-request-id'] as string) ?? 'REQ-' + Date.now().toString(36)
   try {
     if (req.method === 'OPTIONS') return send(res, 204, {})
-    if (req.method === 'GET' && url.pathname === '/api/v1/health') return send(res, 200, { code: 0, status: 'UP', version: '0.2.0', time: new Date().toISOString() })
+    if (req.method === 'GET' && url.pathname === '/api/v1/health') return send(res, 200, { code: 0, status: 'UP', version: '0.3.0', time: new Date().toISOString() })
     if (req.method === 'GET' && url.pathname === '/api/v1/cabin/configs') return send(res, 200, { code: 0, configs: CABIN_CONFIGS })
     if (req.method !== 'POST') return send(res, 404, { code: 40401, message: '资源不存在', requestId })
     const text = await readBody(req)
@@ -62,7 +62,8 @@ createServer(async (req, res) => {
       const cons = { ...DEFAULT_CONSTRAINTS, ...((body.constraints as object) ?? {}) }
       const plan = await planOrder(cargos, DEFAULT_PALLET, cons, DEFAULT_SEQUENCE, (body.allocation as object) ?? {}, planMany)
       const palletizing = palletizingPayload(orderId, plan.pallets, DEFAULT_PALLET, cons)
-      if (url.pathname.endsWith('palletizing/plans')) return send(res, 200, { code: 0, requestId, elapsedMs: Math.round(performance.now() - t0), plan: palletizing })
+      // 两种落地方式用同一份方案：plan 供人工引导与仓储出库，robotJobs 供机械臂直接执行
+      if (url.pathname.endsWith('palletizing/plans')) return send(res, 200, { code: 0, requestId, elapsedMs: Math.round(performance.now() - t0), plan: palletizing, robotJobs: robotPayload(orderId, plan.pallets, cons).jobs })
       const cfg = pickConfig(body)
       const units = plan.pallets.map((p) => toPalletUnit(p, DEFAULT_PALLET, cons))
       const loading = planLoading(cfg, units, { dropMode: body.dropMode as string | undefined })

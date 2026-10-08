@@ -190,7 +190,7 @@ export interface LoadingPlan {
   baseline: { assignments: Assignment[]; metrics: LoadMetrics; tracks: Record<string, StageTrack> } | null
 }
 
-// ───────────────────────── 内置构型（参数化示例，正式数据以舱段方接口为准） ─────────────────────────
+// ───────────────────────── 内置构型（无人运输机货舱的参数化示例，正式数据以舱段方接口为准） ─────────────────────────
 
 function lane(cabin: string, prefix: string, xs: number[], y: number, laneIdx: number, maxWeight: number): SlotDef[] {
   return xs.map((x, i) => ({ id: `${prefix}${i + 1}`, cabin, lane: laneIdx, x, y, maxWeight }))
@@ -206,8 +206,8 @@ export const CABIN_CONFIGS: CabinConfig[] = [
     version: 'v1.2',
     length: 9000,
     width: 2000,
-    cabins: [{ id: 'MAIN', name: '主货舱', x0: 0, x1: 9000, width: 2000, height: 1900, maxWeight: 2400, loadDoor: 'TAIL' }],
-    slots: lane('MAIN', 'A', seq(900, 1440, 6), 0, 0, 600),
+    cabins: [{ id: 'MAIN', name: '主货舱', x0: 0, x1: 9000, width: 2000, height: 1900, maxWeight: 4200, loadDoor: 'TAIL' }],
+    slots: lane('MAIN', 'A', seq(900, 1440, 6), 0, 0, 700),
     doors: [
       { id: 'TAIL', kind: 'tail', cabin: 'MAIN', x: 9000, y: 0, name: '尾门' },
       { id: 'SIDE', kind: 'side', cabin: 'MAIN', x: 2340, y: -1000, name: '左侧舱门' },
@@ -218,7 +218,7 @@ export const CABIN_CONFIGS: CabinConfig[] = [
       { id: 'drop-side', kind: 'side', door: 'SIDE', name: '侧投' },
       { id: 'drop-belly', kind: 'belly', door: 'BELLY', name: '腹投' },
     ],
-    emptyWeight: 5200,
+    emptyWeight: 9000,
     emptyCog: { x: 4300, y: 0 },
     targetCog: { x: 4400, y: 0 },
     tolX: 0.1,
@@ -235,8 +235,8 @@ export const CABIN_CONFIGS: CabinConfig[] = [
     version: 'v1.0',
     length: 6600,
     width: 3200,
-    cabins: [{ id: 'MAIN', name: '主货舱', x0: 0, x1: 6600, width: 3200, height: 2100, maxWeight: 3200, loadDoor: 'TAIL' }],
-    slots: [...lane('MAIN', 'L', seq(1000, 1500, 4), -720, 0, 600), ...lane('MAIN', 'R', seq(1000, 1500, 4), 720, 1, 600)],
+    cabins: [{ id: 'MAIN', name: '主货舱', x0: 0, x1: 6600, width: 3200, height: 2100, maxWeight: 5600, loadDoor: 'TAIL' }],
+    slots: [...lane('MAIN', 'L', seq(1000, 1500, 4), -720, 0, 700), ...lane('MAIN', 'R', seq(1000, 1500, 4), 720, 1, 700)],
     doors: [
       { id: 'TAIL', kind: 'tail', cabin: 'MAIN', x: 6600, y: 0, name: '尾门' },
       { id: 'SIDE', kind: 'side', cabin: 'MAIN', x: 1000, y: 1600, name: '右侧舱门' },
@@ -245,7 +245,7 @@ export const CABIN_CONFIGS: CabinConfig[] = [
       { id: 'drop-tail', kind: 'tail', door: 'TAIL', name: '尾投' },
       { id: 'drop-side', kind: 'side', door: 'SIDE', name: '侧投' },
     ],
-    emptyWeight: 8600,
+    emptyWeight: 15000,
     emptyCog: { x: 3200, y: 0 },
     targetCog: { x: 3150, y: 0 },
     tolX: 0.1,
@@ -263,10 +263,10 @@ export const CABIN_CONFIGS: CabinConfig[] = [
     length: 12300,
     width: 2000,
     cabins: [
-      { id: 'FWD', name: '前舱', x0: 0, x1: 4500, width: 2000, height: 1900, maxWeight: 1200, loadDoor: 'SIDE' },
-      { id: 'AFT', name: '后舱', x0: 6300, x1: 12300, width: 2000, height: 1900, maxWeight: 1500, loadDoor: 'TAIL' },
+      { id: 'FWD', name: '前舱', x0: 0, x1: 4500, width: 2000, height: 1900, maxWeight: 2100, loadDoor: 'SIDE' },
+      { id: 'AFT', name: '后舱', x0: 6300, x1: 12300, width: 2000, height: 1900, maxWeight: 2800, loadDoor: 'TAIL' },
     ],
-    slots: [...lane('FWD', 'F', seq(800, 1440, 3), 0, 0, 600), ...lane('AFT', 'R', seq(7100, 1440, 4), 0, 0, 600)],
+    slots: [...lane('FWD', 'F', seq(800, 1440, 3), 0, 0, 700), ...lane('AFT', 'R', seq(7100, 1440, 4), 0, 0, 700)],
     doors: [
       { id: 'SIDE', kind: 'side', cabin: 'FWD', x: 3680, y: -1000, name: '前舱左侧门' },
       { id: 'TAIL', kind: 'tail', cabin: 'AFT', x: 12300, y: 0, name: '尾门' },
@@ -277,7 +277,7 @@ export const CABIN_CONFIGS: CabinConfig[] = [
       { id: 'drop-side', kind: 'side', door: 'SIDE', name: '侧投（前舱）' },
       { id: 'drop-belly', kind: 'belly', door: 'BELLY', name: '腹投（后舱）' },
     ],
-    emptyWeight: 9400,
+    emptyWeight: 16500,
     emptyCog: { x: 6050, y: 0 },
     targetCog: { x: 6150, y: 0 },
     tolX: 0.1,
@@ -294,11 +294,11 @@ export const CABIN_CONFIGS: CabinConfig[] = [
     version: 'v0.8',
     length: 9600,
     width: 3200,
-    cabins: [{ id: 'MAIN', name: '主货舱', x0: 0, x1: 9600, width: 3200, height: 2100, maxWeight: 4800, loadDoor: 'TAIL' }],
-    slots: [...lane('MAIN', 'L', seq(950, 1500, 6), -720, 0, 600), ...lane('MAIN', 'R', seq(950, 1500, 6), 720, 1, 600)],
+    cabins: [{ id: 'MAIN', name: '主货舱', x0: 0, x1: 9600, width: 3200, height: 2100, maxWeight: 8400, loadDoor: 'TAIL' }],
+    slots: [...lane('MAIN', 'L', seq(950, 1500, 6), -720, 0, 700), ...lane('MAIN', 'R', seq(950, 1500, 6), 720, 1, 700)],
     doors: [{ id: 'TAIL', kind: 'tail', cabin: 'MAIN', x: 9600, y: 0, name: '尾门' }],
     drops: [{ id: 'drop-tail', kind: 'tail', door: 'TAIL', name: '尾投' }],
-    emptyWeight: 14500,
+    emptyWeight: 25000,
     emptyCog: { x: 4650, y: 0 },
     targetCog: { x: 4600, y: 0 },
     tolX: 0.1,

@@ -10,9 +10,10 @@ import CogCard from '../components/CogCard.vue'
 import Icon from '../components/Icon.vue'
 const CompareView = defineAsyncComponent(() => import('../components/CompareView.vue'))
 const StationView = defineAsyncComponent(() => import('../components/StationView.vue'))
+const RobotView = defineAsyncComponent(() => import('../components/RobotView.vue'))
 const ParamsDrawer = defineAsyncComponent(() => import('../components/ParamsDrawer.vue'))
 
-/** 单盘码放工作区：规划演示 / 顺序对比 / 工位引导 */
+/** 单盘码放工作区：规划演示 / 方案对比 / 人工引导 / 机械臂（后两种是同一份方案的两种落地方式） */
 const { lw, rw, vh } = usePanels()
 
 function onKey(e: KeyboardEvent) {
@@ -54,6 +55,7 @@ const vars = computed(() => ({ '--il': insets.value.l + 'px', '--ir': insets.val
   </main>
   <div v-else class="sub">
     <CompareView v-if="state.mode === 'compare'" />
+    <RobotView v-else-if="state.mode === 'robot'" />
     <StationView v-else />
   </div>
 </template>

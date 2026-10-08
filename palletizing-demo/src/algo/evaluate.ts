@@ -4,8 +4,12 @@
  */
 import type { Constraints, LayoutMetrics, LayoutResult, MetricItem, PalletSpec, Placement } from './types'
 import { bboxOf, overlap1d, supportOf } from './geometry'
+import { computeLoads, loadRatio } from './bearing'
 
 const pct = (v: number, d = 1) => (v * 100).toFixed(d) + '%'
+
+/** 必须达标的指标：技术要求表 2-2 的各项，加上本项目要求的货物承压 */
+export const isRequired = (m: MetricItem) => m.source.startsWith('表') || m.key === 'bearing'
 
 export function systemCog(placements: Placement[], pallet: PalletSpec, cons: Constraints): [number, number, number, number] {
   let m = pallet.tareWeight
@@ -87,6 +91,16 @@ export function evaluateLayout(layout: LayoutResult, pallet: PalletSpec, cons: C
     }
   }
 
+  // 承压：每件顶面的压重与承压上限比较
+  const loads = computeLoads(pl, tol)
+  const ratios = pl.map((p, i) => loadRatio(loads[i], p.maxLoad))
+  const maxLoadRatio = ratios.length ? Math.max(...ratios) : 0
+  const overloaded = ratios.filter((r) => r > 1 + 1e-6).length
+  const limited = pl.filter((p) => p.maxLoad !== undefined).length
+  const worst = ratios.indexOf(maxLoadRatio)
+  const cargoVolume = pl.reduce((s, p) => s + p.dx * p.dy * p.dz, 0)
+  const volumeUtilization = height > 0 ? cargoVolume / (cons.footprintX * cons.footprintY * height) : 0
+
   const interlockRatio = seamCoverage(pl, tol)
   const sec = elapsedMs / 1000
   const fx = cons.footprintX
@@ -122,17 +136,30 @@ export function evaluateLayout(layout: LayoutResult, pallet: PalletSpec, cons: C
       limit: `≥ ${pct(cons.utilizationMin, 0)}`,
       pass: minLayerUtilization >= cons.utilizationMin - 1e-9,
       source: '表 2-2 第 3 项',
-      note: `按图 2-1 口径：相对 ${fx}×${fy} 承载面，逐层计算，顶层不计`,
+      note: `相对 ${fx}×${fy} 可用区域，逐层计算，顶层不计`,
     },
     {
       key: 'envelope',
       name: '垛形外边界',
       value: height,
       display: `${stackSize[0]}×${stackSize[1]}×${height}`,
-      limit: `≤ ${fx}×${fy}×(${cons.minStackHeight}–${cons.maxStackHeight})`,
+      limit: cons.minStackHeight > 0 ? `≤ ${fx}×${fy}×(${cons.minStackHeight}–${cons.maxStackHeight})` : `≤ ${fx}×${fy}×${cons.maxStackHeight}`,
       pass: stackSize[0] <= fx + 0.5 && stackSize[1] <= fy + 0.5 && height <= cons.maxStackHeight + 0.5,
       source: '表 2-2 第 4 项',
       note: height < cons.minStackHeight ? `垛高低于 ${cons.minStackHeight} mm：本盘货量不足（由多盘分配决定）` : undefined,
+    },
+    {
+      key: 'bearing',
+      name: '货物承压',
+      value: maxLoadRatio,
+      display: !limited ? '未给承压上限' : overloaded ? `${overloaded} 件超限 · 最大 ${pct(maxLoadRatio, 0)}` : `最大承压比 ${pct(maxLoadRatio, 0)}`,
+      limit: '压重 ≤ 承压上限',
+      pass: limited ? overloaded === 0 : null,
+      source: '承压（项目要求）',
+      note:
+        limited && worst >= 0 && maxLoadRatio > 0
+          ? `压得最重的一件：上方压重 ${loads[worst].toFixed(1)} kg，承压上限 ${pl[worst].maxLoad} kg。压重按接触面积向下逐层传递`
+          : '每件货物顶面承受的压重（上方货物的重量按接触面积向下传递）不超过它的承压上限',
     },
     {
       key: 'overhang',
@@ -172,6 +199,16 @@ export function evaluateLayout(layout: LayoutResult, pallet: PalletSpec, cons: C
       source: '硬约束独立校验',
     },
     {
+      key: 'volume',
+      name: '空间利用率',
+      value: volumeUtilization,
+      display: pl.length ? pct(volumeUtilization) : '—',
+      limit: '参考',
+      pass: null,
+      source: '空间（参考）',
+      note: `货物体积 ÷（${fx}×${fy} × 垛高 ${height} mm）`,
+    },
+    {
       key: 'bottomHeavy',
       name: '下半垛重量占比',
       value: lowerHalfMassRatio,
@@ -207,6 +244,10 @@ export function evaluateLayout(layout: LayoutResult, pallet: PalletSpec, cons: C
     minSupportRatio,
     interlockRatio,
     lowerHalfMassRatio,
+    loads,
+    maxLoadRatio,
+    overloaded,
+    volumeUtilization,
     collisions,
     outOfBounds,
     items,

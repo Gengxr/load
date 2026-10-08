@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { PalletViewer, type CameraPreset, type ViewerPlan } from '../viz/PalletViewer'
-import { cargoById, currentSeq, result, skuColors, state } from '../store'
+import { cargoById, currentSeq, result, robotPose, skuColors, state } from '../store'
+import { KIND_NAME } from '../algo/types'
+import { loadRatio } from '../algo/bearing'
+import { isRequired } from '../algo/evaluate'
+import { heatColor } from '../viz/palette'
+import { usePanels } from '../layout'
 import { registerViewer, unregisterViewer } from '../playback'
 import type { SequenceStrategy } from '../algo/types'
 import { ACCENT } from '../viz/palette'
@@ -22,6 +27,8 @@ const props = withDefaults(
     accent?: string
     camera?: CameraPreset
     radarRange?: number
+    /** 机械臂模式：显示码垛机械臂，每件由机械臂取放 */
+    robot?: boolean
   }>(),
   {
     strategy: 'current',
@@ -32,6 +39,7 @@ const props = withDefaults(
     showConveyor: true,
     accent: ACCENT,
     camera: 'iso',
+    robot: false,
   },
 )
 
@@ -40,31 +48,37 @@ const viewer = shallowRef<PalletViewer | null>(null)
 const hoverInfo = ref<{ i: number; x: number; y: number } | null>(null)
 const cam = ref<CameraPreset>(props.camera)
 
-const seq = computed(() => {
+/** 本视图展示的方案：DBLF 用它自己的垛形与顺序，其余用本方案的垛形配所选顺序 */
+const src = computed(() => {
   const r = result.value
   if (!r) return null
-  if (props.strategy === 'current') return currentSeq.value
-  return props.strategy === 'balance' ? r.sequences.balance : r.sequences.baseline
+  if (props.strategy === 'dblf') return { pl: r.dblf.layout.placements, sups: r.dblf.supporters, seq: r.dblf.sequence, loads: r.dblf.metrics.loads }
+  const q = props.strategy === 'current' ? currentSeq.value : props.strategy === 'balance' ? r.sequences.balance : r.sequences.baseline
+  return q ? { pl: r.layout.placements, sups: r.supporters, seq: q, loads: r.metrics.loads } : null
 })
+const seq = computed(() => src.value?.seq ?? null)
 
 const tolHalf = computed(() => state.cons.cogOffsetRatioMax * (state.cons.cogOffsetBase === 'pallet' ? state.pallet.length : state.cons.footprintX))
 
 function buildPlan(): ViewerPlan | null {
-  const r = result.value
-  const s = seq.value
-  if (!r || !s) return null
+  const d = src.value
+  if (!d) return null
+  const s = d.seq
   return {
-    placements: r.layout.placements,
+    placements: d.pl,
     order: s.order,
     steps: s.steps,
-    supporters: r.supporters,
-    colors: r.layout.placements.map((p) => skuColors.value.get(p.sku) ?? '#cbd5e1'),
+    supporters: d.sups,
+    colors: d.pl.map((p) => skuColors.value.get(p.sku) ?? '#cbd5e1'),
     footprintX: state.cons.footprintX,
     footprintY: state.cons.footprintY,
     maxHeight: state.cons.maxStackHeight,
     pallet: state.pallet,
     tolHalf: tolHalf.value,
     tolRatio: state.cons.cogOffsetRatioMax,
+    kinds: d.pl.map((p) => p.kind),
+    heat: d.pl.map((p, i) => loadRatio(d.loads[i], p.maxLoad)),
+    warmup: s.summary.warmupSteps,
   }
 }
 
@@ -78,6 +92,17 @@ onMounted(() => {
   v.setCogVisible(state.showCog)
   v.setAutoRotate(state.autoRotate)
   v.setPlan(buildPlan())
+  if (props.hud === 'full') v.setHeat(state.showHeat)
+  if (props.robot) {
+    let last = 0
+    v.onRobot = (s) => {
+      const now = performance.now()
+      if (now - last < 60 && s.gripping === robotPose.value?.gripping) return
+      last = now
+      robotPose.value = { ...s }
+    }
+    v.setRobot(true)
+  }
   v.gotoStep(state.step)
   v.setLayerLimit(state.layerLimit)
   registerViewer(v)
@@ -90,7 +115,7 @@ onBeforeUnmount(() => {
   }
 })
 
-watch([result, seq], () => {
+watch([result, src], () => {
   const v = viewer.value
   if (!v) return
   v.setPlan(buildPlan())
@@ -111,6 +136,10 @@ watch(
   (on) => viewer.value?.setCogVisible(on),
 )
 watch(
+  () => state.showHeat,
+  (on) => props.hud === 'full' && viewer.value?.setHeat(on),
+)
+watch(
   () => state.autoRotate,
   (on) => viewer.value?.setAutoRotate(on),
 )
@@ -122,8 +151,8 @@ watch(
   () => state.selectedLayer,
   (l) => {
     const r = result.value
-    if (!r || !viewer.value) return
-    viewer.value.setHighlight(l === null ? [] : r.layout.placements.map((p, i) => (p.layer === l ? i : -1)).filter((i) => i >= 0))
+    if (!r || !viewer.value || !src.value) return
+    viewer.value.setHighlight(l === null ? [] : src.value.pl.map((p, i) => (p.layer === l ? i : -1)).filter((i) => i >= 0))
   },
 )
 
@@ -144,27 +173,29 @@ function snapshot() {
 // ───────── HUD 数据 ─────────
 const n = computed(() => result.value?.layout.placements.length ?? 0)
 const curBox = computed(() => {
-  const r = result.value
-  const s = seq.value
-  if (!r || !s || state.step >= s.order.length) return null
-  const i = s.order[state.step]
-  const p = r.layout.placements[i]
-  return { p, c: cargoById.value.get(p.cargoId), sup: r.supporters[i].length }
+  const d = src.value
+  if (!d || state.step >= d.seq.order.length) return null
+  const i = d.seq.order[state.step]
+  const p = d.pl[i]
+  return { p, c: cargoById.value.get(p.cargoId), sup: d.sups[i].length }
 })
 const readout = computed(() => {
-  const s = seq.value
-  const r = result.value
-  if (!s || !r) return null
+  const d = src.value
+  if (!d) return null
+  const s = d.seq
   const k = Math.min(state.step, s.steps.ratio.length - 1)
   const fx = state.cons.footprintX
   const fy = state.cons.footprintY
   const base = state.cons.cogOffsetBase === 'pallet' ? state.pallet.length : fx
-  const peak = Math.max(...s.steps.ratio.slice(0, k + 1))
-  const top = k === 0 ? 0 : Math.max(...s.order.slice(0, k).map((i) => r.layout.placements[i].z + r.layout.placements[i].dz))
+  // 过程峰值不计起步阶段
+  const w = s.summary.warmupSteps
+  const peak = k > w ? Math.max(...s.steps.ratio.slice(w + 1, k + 1)) : 0
+  const top = k === 0 ? 0 : Math.max(...s.order.slice(0, k).map((i) => d.pl[i].z + d.pl[i].dz))
   return {
     dx: (s.steps.cogX[k] - fx / 2) / base,
     dy: (s.steps.cogY[k] - fy / 2) / base,
     ratio: s.steps.ratio[k],
+    warm: k <= w && k > 0,
     peak,
     mass: s.steps.mass[k],
     hRatio: k === 0 ? 0 : (s.steps.cogZ[k] + state.pallet.height) / (top + state.pallet.height),
@@ -173,17 +204,17 @@ const readout = computed(() => {
 })
 const hoverBox = computed(() => {
   const h = hoverInfo.value
-  const r = result.value
-  const s = seq.value
-  if (!h || !r || !s) return null
-  const p = r.layout.placements[h.i]
+  const d = src.value
+  if (!h || !d || !d.pl[h.i]) return null
+  const p = d.pl[h.i]
   const c = cargoById.value.get(p.cargoId)
-  return { ...h, p, c, seqNo: s.order.indexOf(h.i) + 1, sup: r.supporters[h.i].length }
+  const load = d.loads[h.i] ?? 0
+  return { ...h, p, c, seqNo: d.seq.order.indexOf(h.i) + 1, sup: d.sups[h.i].length, load, ratio: loadRatio(load, p.maxLoad) }
 })
 const summary = computed(() => {
   const r = result.value
   if (!r) return null
-  const tech = r.metrics.items.filter((m) => m.source.startsWith('表'))
+  const tech = r.metrics.items.filter(isRequired)
   return {
     ok: tech.filter((m) => m.pass).length,
     all: tech.length,
@@ -197,9 +228,15 @@ const cams: { k: CameraPreset; n: string }[] = [
   { k: 'side', n: '侧视' },
   { k: 'top', n: '俯视' },
   { k: 'operator', n: '工位' },
+  ...(props.robot ? [{ k: 'robot' as CameraPreset, n: '机械臂' }] : []),
 ]
 const layerCount = computed(() => result.value?.layout.layers.length ?? 0)
-const strategyName = computed(() => (seq.value?.strategy === 'balance' ? '本方案 · 平衡优先动态顺序' : '传统 · 逐层行扫描'))
+const strategyName = computed(() => ({ balance: '本方案 · 平衡优先动态顺序', 'layer-row': '对照基线 · 逐层行扫描', dblf: '对照算法 · DBLF（最深-最低-最左）' })[seq.value?.strategy ?? 'balance'])
+const heatStops = [0, 0.25, 0.5, 0.75, 1].map((v) => heatColor(v))
+// 两侧面板之间的空白太窄时不显示图例（指标面板里的"货物承压"一项给出同样的信息）
+const { vw } = usePanels()
+const roomy = computed(() => props.variant !== 'fullbleed' || vw.value - props.insets.l - props.insets.r >= 420)
+const overCount = computed(() => result.value?.metrics.overloaded ?? 0)
 const hudStyle = computed(() =>
   props.variant === 'fullbleed'
     ? { left: props.insets.l + 'px', right: props.insets.r + 'px', top: props.insets.t + 'px', bottom: props.insets.b + 'px' }
@@ -225,6 +262,7 @@ defineExpose({ viewer })
           </div>
           <div class="num dims">{{ curBox.p.dx }}<i>×</i>{{ curBox.p.dy }}<i>×</i>{{ curBox.p.dz }}<small>mm</small></div>
           <div class="chips num">
+            <span class="kind" :class="curBox.p.kind ?? 'carton'">{{ KIND_NAME[curBox.p.kind ?? 'carton'] }}{{ curBox.c?.name ? ' · ' + curBox.c.name : '' }}</span>
             <span>第 {{ curBox.p.layer + 1 }} 层</span>
             <span>{{ curBox.p.weight.toFixed(1) }} kg</span>
             <span>{{ curBox.p.rotated ? '长边沿前后' : '长边沿左右' }}</span>
@@ -259,7 +297,7 @@ defineExpose({ viewer })
           </span>
           <span class="m-txt">
             <span class="m-t">技术指标 {{ summary.ok }}/{{ summary.all }} 达标</span>
-            <span class="m-s num">过程峰值偏心 <b class="o">{{ pct(summary.ours) }}</b> · 传统 <b class="b">{{ pct(summary.base) }}</b></span>
+            <span class="m-s num">过程峰值偏心 <b class="o">{{ pct(summary.ours) }}</b> · 逐层行扫描 <b class="b">{{ pct(summary.base) }}</b></span>
           </span>
           <Icon name="chevron" :size="16" class="m-chev" />
         </button>
@@ -271,6 +309,7 @@ defineExpose({ viewer })
           <button v-for="c in cams" :key="c.k" class="tb" :class="{ on: cam === c.k }" @click="setCam(c.k)">{{ c.n }}</button>
           <div class="sep" />
           <button class="tb ic" :class="{ on: state.showCog }" data-tip="重心显示" @click="state.showCog = !state.showCog"><Icon name="target" :size="16" /></button>
+          <button class="tb ic" :class="{ on: state.showHeat }" data-tip="承压热力图" @click="state.showHeat = !state.showHeat"><Icon name="weight" :size="16" /></button>
           <button class="tb ic" :class="{ on: state.showLabels }" data-tip="码放序号" @click="state.showLabels = !state.showLabels"><Icon name="hash" :size="16" /></button>
           <button class="tb ic" :class="{ on: state.autoRotate }" data-tip="自动旋转" @click="state.autoRotate = !state.autoRotate"><Icon name="rotate" :size="16" /></button>
           <button class="tb ic" data-tip="截图" @click="snapshot"><Icon name="image" :size="16" /></button>
@@ -291,6 +330,16 @@ defineExpose({ viewer })
         </div>
       </div>
 
+      <!-- 承压热力图图例 -->
+      <Transition name="fade">
+        <div v-if="state.showHeat && roomy" class="heat glass">
+          <div class="heat-t"><Icon name="weight" :size="14" />货物承压<span>压重 ÷ 承压上限</span></div>
+          <div class="heat-bar" :style="{ background: `linear-gradient(90deg, ${heatStops.join(',')})` }"><i /></div>
+          <div class="heat-x num"><span>0</span><span>50%</span><span>100%</span><span class="over">超限</span></div>
+          <div class="heat-s" :class="{ bad: overCount > 0 }">{{ overCount ? `${overCount} 件超出承压上限` : '没有货物被压超限' }}</div>
+        </div>
+      </Transition>
+
       <!-- 重心（全屏模式下由左栏的重心卡片显示） -->
       <div v-if="readout && state.showCog && seq && variant !== 'fullbleed'" class="cog glass">
         <CogRadar
@@ -300,13 +349,14 @@ defineExpose({ viewer })
           :fy="state.cons.footprintY"
           :tol-half="tolHalf"
           :tol-ratio="state.cons.cogOffsetRatioMax"
+          :warmup="seq.summary.warmupSteps"
           :color="accent"
           :size="128"
           :range="radarRange"
         />
         <div class="cog-r">
           <div class="cog-t"><span class="dotc" />系统重心 · 货物+货盘</div>
-          <div class="cog-big num" :class="readout.ratio > state.cons.cogOffsetRatioMax ? 'bad' : 'ok'">
+          <div class="cog-big num" :class="readout.ratio > state.cons.cogOffsetRatioMax && !readout.warm ? 'bad' : 'ok'">
             {{ pct(readout.ratio) }}<small>当前偏心</small>
           </div>
           <div class="kv num"><span>X / Y</span><b>{{ signedPct(readout.dx) }} / {{ signedPct(readout.dy) }}</b></div>
@@ -325,7 +375,7 @@ defineExpose({ viewer })
       <div class="cmp-stats">
         <div class="st">
           <span>当前偏心</span>
-          <b class="num" :class="readout.ratio > state.cons.cogOffsetRatioMax ? 'bad' : ''">{{ pct(readout.ratio) }}</b>
+          <b class="num" :class="readout.ratio > state.cons.cogOffsetRatioMax && !readout.warm ? 'bad' : ''">{{ pct(readout.ratio) }}</b>
         </div>
         <div class="st">
           <span>过程峰值</span>
@@ -344,6 +394,7 @@ defineExpose({ viewer })
           :fy="state.cons.footprintY"
           :tol-half="tolHalf"
           :tol-ratio="state.cons.cogOffsetRatioMax"
+          :warmup="seq.summary.warmupSteps"
           :color="accent"
           :size="168"
           :range="radarRange"
@@ -354,7 +405,11 @@ defineExpose({ viewer })
     <div v-if="hoverBox" class="tip" :style="{ left: hoverBox.x + 16 + 'px', top: hoverBox.y + 16 + 'px' }">
       <div class="tip-h"><i :style="{ background: skuColors.get(hoverBox.p.sku) }" />{{ hoverBox.c?.id }}<span>第 {{ hoverBox.seqNo }} 件</span></div>
       <div class="num">{{ hoverBox.p.dx }}×{{ hoverBox.p.dy }}×{{ hoverBox.p.dz }} mm · {{ hoverBox.p.weight.toFixed(2) }} kg</div>
+      <div class="num">{{ KIND_NAME[hoverBox.p.kind ?? 'carton'] }}{{ hoverBox.c?.name ? ' · ' + hoverBox.c.name : '' }}{{ hoverBox.c?.fragile ? ' · 怕压' : '' }}</div>
       <div class="num">第 {{ hoverBox.p.layer + 1 }} 层 · 底面高 {{ hoverBox.p.z }} mm</div>
+      <div v-if="hoverBox.p.maxLoad !== undefined" class="num" :class="{ warn: hoverBox.ratio > 1 }">
+        上方压重 {{ hoverBox.load.toFixed(1) }} kg / 承压上限 {{ hoverBox.p.maxLoad }} kg<b :style="{ color: heatColor(hoverBox.ratio) }"> {{ pct(hoverBox.ratio, 0) }}</b>
+      </div>
       <div class="num mono">RFID {{ hoverBox.c?.rfid }}</div>
       <div class="tip-s">{{ hoverBox.sup ? `由 ${hoverBox.sup} 件货物托住（青色高亮）` : '直接落在货盘上' }}</div>
     </div>
@@ -465,6 +520,123 @@ defineExpose({ viewer })
 }
 .mono {
   font-family: var(--mono);
+}
+.chips .kind {
+  color: var(--text);
+  font-weight: 600;
+  padding-left: 8px;
+  border-left: 3px solid #d8b48a;
+}
+.chips .kind.wood {
+  border-left-color: #b9824d;
+}
+.chips .kind.case {
+  border-left-color: #6f8256;
+}
+
+/* 两侧面板之间的空白较窄时：当前货物卡片只留最要紧的信息，并给右侧工具栏让出位置 */
+.hud {
+  container-type: inline-size;
+}
+.cur {
+  max-width: calc(100% - 66px);
+}
+@container (max-width: 780px) {
+  .cur {
+    min-width: 0;
+    padding-right: 14px;
+  }
+  .cur .chips span:nth-child(n + 4) {
+    display: none;
+  }
+  .cur .dims {
+    font-size: 19px;
+  }
+}
+@container (max-width: 600px) {
+  .cur .chips span:nth-child(n + 2) {
+    display: none;
+  }
+  .cur .chips {
+    flex-wrap: nowrap;
+  }
+  .cur .chips .kind {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .cur-main {
+    min-width: 0;
+  }
+}
+/* 空白只剩三百来像素（小窗口同时打开两侧面板）：卡片收起，信息在时间轴和左侧面板里仍然可见 */
+@container (max-width: 420px) {
+  .cur {
+    display: none;
+  }
+}
+
+/* 承压热力图图例 */
+.heat {
+  position: absolute;
+  left: 0;
+  top: 118px;
+  width: 232px;
+  /* 右侧留出竖向工具栏的位置 */
+  max-width: calc(100% - 66px);
+  padding: 11px 14px 10px;
+}
+.heat-t {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+.heat-t span {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+.heat-bar {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  margin: 9px 22px 0 0;
+}
+.heat-bar i {
+  position: absolute;
+  right: -22px;
+  top: 0;
+  width: 18px;
+  height: 8px;
+  border-radius: 4px;
+  background: #ef4444;
+}
+.heat-x {
+  display: flex;
+  justify-content: space-between;
+  margin: 4px 22px 0 0;
+  font-size: 10.5px;
+  color: var(--text-3);
+  position: relative;
+}
+.heat-x .over {
+  position: absolute;
+  right: -24px;
+  color: #f87171;
+}
+.heat-s {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--ok);
+}
+.heat-s.bad {
+  color: var(--bad);
+}
+.tip .warn {
+  color: var(--bad);
 }
 
 /* 指标摘要 */
@@ -602,6 +774,13 @@ defineExpose({ viewer })
   }
   .st b {
     font-size: 22px;
+  }
+}
+/* 很矮的窗口下对比页的小雷达再缩一档，避免盖住左上角的标题 */
+@media (max-height: 640px) {
+  .cog.small :deep(.radar) {
+    width: 78px;
+    height: 78px;
   }
 }
 @media (max-height: 700px) {

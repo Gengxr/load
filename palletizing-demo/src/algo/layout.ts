@@ -22,6 +22,8 @@ interface Group {
   avgW: number
   unitVol: number
   variants: Variant[]
+  /** 承压上限 kg（同规格取最小值；不限 = Infinity） */
+  cap: number
 }
 
 interface Item {
@@ -53,6 +55,8 @@ interface LState {
   my: number
   mz: number
   done: boolean
+  /** 承压超限量缓存：[当前, 把剩余货物全部压上去后的预估] */
+  ov?: [number, number]
 }
 
 interface Ctx {
@@ -72,6 +76,8 @@ interface Ctx {
   /** 重件置底 / 大件置底 */
   heavy: boolean
   big: boolean
+  /** 承压约束（开启且至少有一种货物给了承压上限时为真） */
+  bearing: boolean
 }
 
 export interface LayoutOptions {
@@ -99,7 +105,9 @@ export function buildLayout(cargos: Cargo[], pallet: PalletSpec, cons: Constrain
     totalBig: cargos.reduce((s, c) => s + (c.length * c.width * c.height) ** 2, 0) || 1,
     heavy: cons.heavyBottom ?? true,
     big: cons.bigBottom ?? true,
+    bearing: false,
   }
+  ctx.bearing = (cons.bearing ?? true) && ctx.groups.some((g) => g.cap < Infinity)
   const layered = layeredSearch(ctx, o)
   const free = freeStrategy(ctx)
   let best = layered
@@ -111,8 +119,11 @@ export function buildLayout(cargos: Cargo[], pallet: PalletSpec, cons: Constrain
   if (!best) best = emptyState(ctx)
   if (strategy === 'layered') {
     if (ctx.heavy || ctx.big) reorderBottomFirst(ctx, best)
+    if (ctx.bearing) repairBearing(ctx, best)
     refineBalance(ctx, best)
   }
+  // 兜底：仍有货物被压超限时，把压在它上面的顶部货物卸下（列入"未放入"，由多盘流程回流到其他货盘）
+  if (ctx.bearing) shedOverload(ctx, best)
   return toResult(ctx, best, strategy)
 }
 
@@ -155,6 +166,7 @@ function groupCargos(cargos: Cargo[], cons: Constraints): Group[] {
       avgW: units.reduce((s, u) => s + u.weight, 0) / units.length,
       unitVol: l * w * h,
       variants: fits,
+      cap: Math.min(...units.map((u) => u.maxLoad ?? Infinity)),
     })
   }
   // 稳定排序：体积大的规格在前
@@ -600,7 +612,9 @@ function partialScore(ctx: Ctx, st: LState): number {
     ctx.groups.forEach((g, i) => (b += (g.units.length - st.counts[i]) * g.unitVol * g.unitVol))
     bigFirst = b / ctx.totalBig - volShare
   }
-  return fill - 0.03 * low + 0.25 * heavyFirst + 0.15 * bigFirst
+  // 耐压在下：把剩余货物都压上去也不超限的方案优先
+  const weak = ctx.bearing && ctx.totalMass > 0 ? overloadMemo(ctx, st)[1] / ctx.totalMass : 0
+  return fill - 0.03 * low + 0.25 * heavyFirst + 0.15 * bigFirst - 1.5 * weak
 }
 
 function layerUtil(ctx: Ctx, l: BLayer): number {
@@ -650,6 +664,10 @@ function levelUtils(ctx: Ctx, st: LState): number[] {
 function finalScore(ctx: Ctx, st: LState): number {
   const unplaced = remainingCount(st)
   let s = -1000 * unplaced
+  if (ctx.bearing) {
+    const over = overloadMemo(ctx, st)[0]
+    if (over > 1e-6) s -= 300 + (2000 * over) / Math.max(1, ctx.totalMass)
+  }
   const flat = st.layers.filter((l) => l.kind !== 'cap')
   // 按"支撑层级"统计利用率：顶层收尾区若叠成多级，每一级都单独考核（只豁免最顶一级）
   const lv = levelUtils(ctx, st)
@@ -808,9 +826,207 @@ function reorderBottomFirst(ctx: Ctx, st: LState) {
   for (const l of L) for (const it of l.items) st.mz += ctx.groups[it.g].avgW * it.stack * (it.z + (it.unitH * it.stack) / 2)
 }
 
+/** 布局阶段按平均单重估算压重，承压上限留 5% 余量（具体到件的重量有 ±5% 的差别） */
+const CAP_MARGIN = 0.95
+
+interface Bearing {
+  items: Item[]
+  /** 每一列顶面承受的压重 kg */
+  top: number[]
+  /** 压在第 i 列上的列 */
+  on: number[][]
+  /** 每一列的超限量 kg（列内各件之和） */
+  over: number[]
+  total: number
+}
+
+/**
+ * 压重自上而下传递：一列货物把"自重 + 顶面压重"按接触面积比例传给正下方托住它的各列。
+ * extra > 0 时，假想把这么多重量均匀铺在最高的顶面上（用于预估"剩余货物全压上去"的后果）。
+ */
+function bearingInfo(ctx: Ctx, layers: BLayer[], extra = 0): Bearing {
+  const items = layers.flatMap((l) => l.items)
+  const n = items.length
+  const top = new Array<number>(n).fill(0)
+  const on: number[][] = Array.from({ length: n }, () => [])
+  const over = new Array<number>(n).fill(0)
+  const tops = items.map(itemTop)
+  // 按顶面高度分桶，找支撑件时只看相邻的桶
+  const B = Math.max(1, ctx.tol * 2)
+  const bucket = new Map<number, number[]>()
+  tops.forEach((t, i) => {
+    const k = Math.round(t / B)
+    const arr = bucket.get(k)
+    if (arr) arr.push(i)
+    else bucket.set(k, [i])
+  })
+  if (extra > 0 && n) {
+    const zTop = Math.max(...tops)
+    let area = 0
+    for (let i = 0; i < n; i++) if (zTop - tops[i] <= ctx.tol) area += items[i].dx * items[i].dy
+    for (let i = 0; i < n; i++) if (zTop - tops[i] <= ctx.tol) top[i] += (extra * items[i].dx * items[i].dy) / area
+  }
+  const order = items.map((_, i) => i).sort((a, b) => items[b].z - items[a].z)
+  let total = 0
+  for (const j of order) {
+    const it = items[j]
+    const g = ctx.groups[it.g]
+    if (g.cap < Infinity) {
+      const cap = g.cap * CAP_MARGIN
+      for (let s = 0; s < it.stack; s++) over[j] += Math.max(0, top[j] + s * g.avgW - cap)
+      total += over[j]
+    }
+    if (it.z <= ctx.tol) continue
+    const r = itemRect(it)
+    const sup: [number, number][] = []
+    let area = 0
+    const k0 = Math.round(it.z / B)
+    for (let k = k0 - 1; k <= k0 + 1; k++) {
+      const arr = bucket.get(k)
+      if (!arr) continue
+      for (const i of arr) {
+        if (i === j || Math.abs(tops[i] - it.z) > ctx.tol) continue
+        const a = overlapArea(itemRect(items[i]), r)
+        if (a <= 0) continue
+        sup.push([i, a])
+        area += a
+      }
+    }
+    const w = top[j] + it.stack * g.avgW
+    for (const [i, a] of sup) {
+      top[i] += (w * a) / area
+      on[i].push(j)
+    }
+  }
+  return { items, top, on, over, total }
+}
+
+/** 承压超限量 kg：Σ max(0, 压重 − 承压上限) */
+function overloadOf(ctx: Ctx, layers: BLayer[]): number {
+  return bearingInfo(ctx, layers).total
+}
+
+function overloadMemo(ctx: Ctx, st: LState): [number, number] {
+  if (!st.ov) {
+    const rest = st.done ? 0 : st.counts.reduce((m, c, g) => m + c * ctx.groups[g].avgW, 0)
+    const now = overloadOf(ctx, st.layers)
+    st.ov = [now, rest > 0 ? bearingInfo(ctx, st.layers, rest).total : now]
+  }
+  return st.ov
+}
+
+/**
+ * 承压兜底：还有货物被压超限时，找出压在它上面的货物里最顶上的一件卸下，直到不再超限。
+ * 卸下的货物计入"未放入"。只卸顶上没有别的货物的件，所以不会破坏其余货物的支撑。
+ */
+function shedOverload(ctx: Ctx, st: LState): number {
+  let shed = 0
+  for (let guard = 0; guard < 500; guard++) {
+    const info = bearingInfo(ctx, st.layers)
+    if (info.total <= 1e-6) break
+    const above = new Set<number>()
+    const todo: number[] = []
+    info.over.forEach((v, i) => v > 1e-6 && todo.push(i))
+    const bad = [...todo]
+    while (todo.length) for (const j of info.on[todo.pop()!]) if (!above.has(j)) (above.add(j), todo.push(j))
+    let pick = -1
+    for (const j of above) {
+      if (info.on[j].length) continue
+      const a = info.items[j]
+      const b = pick < 0 ? null : info.items[pick]
+      if (!b || itemTop(a) > itemTop(b) + ctx.tol || (Math.abs(itemTop(a) - itemTop(b)) <= ctx.tol && ctx.groups[a.g].avgW > ctx.groups[b.g].avgW)) pick = j
+    }
+    // 上面没有别的货物：超限来自同一列里叠放的上层件
+    if (pick < 0) pick = bad.find((i) => !info.on[i].length && info.items[i].stack > 1) ?? -1
+    if (pick < 0) break
+    const it = info.items[pick]
+    for (const l of st.layers) {
+      const k = l.items.indexOf(it)
+      if (k < 0) continue
+      l.items = it.stack > 1 ? l.items.map((x) => (x === it ? { ...it, stack: it.stack - 1 } : x)) : l.items.filter((x) => x !== it)
+      break
+    }
+    st.counts[it.g]++
+    shed++
+  }
+  if (!shed) return 0
+  st.layers = st.layers.filter((l) => l.items.length)
+  st.vol = st.mass = st.mx = st.my = st.mz = st.z = 0
+  for (const l of st.layers)
+    for (const it of l.items) {
+      const g = ctx.groups[it.g]
+      const m = g.avgW * it.stack
+      st.vol += g.unitVol * it.stack
+      st.mass += m
+      st.mx += m * (it.x + it.dx / 2 - ctx.FX / 2)
+      st.my += m * (it.y + it.dy / 2 - ctx.FY / 2)
+      st.mz += m * (it.z + (it.unitH * it.stack) / 2)
+      st.z = Math.max(st.z, itemTop(it))
+    }
+  st.ov = undefined
+  return shed
+}
+
+/** 交换相邻两层（i 与 i+1），返回撤销函数 */
+function swapLayers(L: BLayer[], i: number): () => void {
+  const a = L[i]
+  const b = L[i + 1]
+  const mv = (l: BLayer, d: number) => {
+    l.z += d
+    l.items = l.items.map((it) => ({ ...it, z: it.z + d }))
+  }
+  mv(b, -a.height)
+  mv(a, b.height)
+  L[i] = b
+  L[i + 1] = a
+  return () => {
+    L[i] = a
+    L[i + 1] = b
+    mv(a, -b.height)
+    mv(b, a.height)
+  }
+}
+
+/**
+ * 承压修正：若有货物的压重超过承压上限，把不耐压的层往上换。
+ * 每轮在所有可行的相邻层交换里取超限量下降最多的一个，直到不再超限或无可改进；
+ * 交换后支撑、外扩、不干涉仍须全部满足。
+ */
+function repairBearing(ctx: Ctx, st: LState) {
+  const L = st.layers
+  let cur = overloadOf(ctx, L)
+  if (cur <= 1e-6) return
+  let top = L.length - 1
+  while (top >= 0 && L[top].kind === 'cap') top--
+  const last = L.length - 1 > top ? top - 1 : top
+  for (let pass = 0; pass < L.length * L.length && cur > 1e-6; pass++) {
+    let best = -1
+    let bestV = cur
+    for (let i = 0; i < last; i++) {
+      const undo = swapLayers(L, i)
+      if (layersOkFrom(ctx, L, i)) {
+        const v = overloadOf(ctx, L)
+        if (v < bestV - 1e-6) {
+          bestV = v
+          best = i
+        }
+      }
+      undo()
+    }
+    if (best < 0) break
+    swapLayers(L, best)
+    cur = bestV
+  }
+  st.mz = 0
+  for (const l of L) for (const it of l.items) st.mz += ctx.groups[it.g].avgW * it.stack * (it.z + (it.unitH * it.stack) / 2)
+}
+
 function refineBalance(ctx: Ctx, st: LState) {
   stateMoments(ctx, st)
   const L = st.layers
+  // 配平的镜像 / 平移会改变上下层的接触关系：不得让承压超限量变大
+  const overBase = ctx.bearing ? overloadOf(ctx, L) : 0
+  const bearOk = () => !ctx.bearing || overloadOf(ctx, L) <= overBase + 1e-6
   for (let pass = 0; pass < 2; pass++) {
     for (let li = L.length - 1; li >= 0; li--) {
       const orig = L[li].items
@@ -822,7 +1038,7 @@ function refineBalance(ctx: Ctx, st: LState) {
         L[li].items = transformItems(orig, region, t)
         stateMoments(ctx, st)
         const sc = offsetScore(ctx, st)
-        if (sc < bestScore - 1e-6 && layersOkFrom(ctx, L, li)) {
+        if (sc < bestScore - 1e-6 && layersOkFrom(ctx, L, li) && bearOk()) {
           bestScore = sc
           bestItems = L[li].items
         }
@@ -842,7 +1058,7 @@ function refineBalance(ctx: Ctx, st: LState) {
         L[li].items = moved
         stateMoments(ctx, st)
         const sc = Math.max(Math.abs(st.mx / M), Math.abs(st.my / M))
-        if (sc < bestScore - 1e-6 && layersOkFrom(ctx, L, li)) {
+        if (sc < bestScore - 1e-6 && layersOkFrom(ctx, L, li) && bearOk()) {
           bestScore = sc
           break
         }
@@ -909,6 +1125,8 @@ function toResult(ctx: Ctx, st: LState, strategy: 'layered' | 'free'): LayoutRes
     tipped: s.tipped,
     layer: s.layer,
     weight: s.unit!.weight,
+    kind: s.unit!.kind,
+    maxLoad: s.unit!.maxLoad,
   }))
 
   const nLayers = slots.reduce((m, s) => Math.max(m, s.layer + 1), 0)

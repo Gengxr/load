@@ -52,8 +52,9 @@ const cubes = computed(() => {
 })
 const features = [
   { icon: 'split', t: '多盘分配', d: '出库清单自动分盘，各盘高度、重量均衡' },
-  { icon: 'boxes', t: '单盘码放', d: '逐件位置与顺序，全程重心受控' },
-  { icon: 'plane', t: '舱内装载', d: '货位配平，装载 / 投放过程重心校验' },
+  { icon: 'boxes', t: '单盘码放', d: '兼顾空间利用、重心平衡与货物承压' },
+  { icon: 'plane', t: '舱内装载', d: '货位配平，全过程不出飞机重心包线' },
+  { icon: 'robot', t: '两种落地方式', d: '同一份方案：人工引导，或机械臂直接执行' },
 ]
 </script>
 
@@ -78,7 +79,7 @@ const features = [
         <span>智能物资储运模拟验证平台</span>
       </div>
       <h1>码盘与装载<br />方案规划系统</h1>
-      <p class="sub">从出库清单到整托入舱：自动分盘、逐件码放引导、舱内配平，全过程三维可视。</p>
+      <p class="sub">从出库清单到整托装机：自动分盘、逐件码放、舱内配平，全过程三维可视。</p>
       <ul class="feat">
         <li v-for="f in features" :key="f.t">
           <span class="fi"><Icon :name="f.icon" :size="18" /></span>
@@ -118,7 +119,7 @@ const features = [
         </button>
         <p class="foot">演示环境已预填体验账号，直接点击登录即可</p>
       </form>
-      <div class="ver num">V0.2 演示版 · 2026</div>
+      <div class="ver num">V0.3 演示版 · 2026</div>
     </section>
   </div>
 </template>

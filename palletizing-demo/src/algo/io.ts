@@ -5,11 +5,13 @@
  *   ① { schemaVersion, pallets: [{ palletNo, cargos: [...] }] }   多盘分配结果，选择其中一盘
  *   ② { cargos: [...] }
  *   ③ [ ...cargos ]
- *   货物字段：id, rfid, sku?, length|l, width|w, height|h (mm), weight (kg)
+ *   货物字段：id, rfid, sku?, length|l, width|w, height|h (mm), weight (kg)；
+ *   属性（可选）：kind 包装类型（carton 纸箱 / wood 木箱 / case 军用特种箱，也接受中文），name 品名，maxLoad 承压上限 kg，fragile 怕压
  *
  * 导出：单盘码放方案（与《系统架构与技术方案 v0.3》§4.2 PalletizingPlan 字段对齐）
  */
-import type { Cargo, Constraints, PalletSpec, PlanResult } from './types'
+import type { Cargo, CargoKind, Constraints, PalletSpec, PlanResult } from './types'
+import { buildRobotJob } from './robot'
 import type { CabinConfig, LoadingPlan, PalletUnit } from './cabin'
 import type { PalletPlan } from './pipeline'
 
@@ -47,7 +49,7 @@ function normalizeCargo(r: Record<string, unknown>, i: number): Cargo {
   const length = Math.max(a, b)
   const width = Math.min(a, b)
   const id = String(r.id ?? r.cargoId ?? `C${String(i + 1).padStart(4, '0')}`)
-  return {
+  const c: Cargo = {
     id,
     rfid: String(r.rfid ?? id),
     sku: String(r.sku ?? `${length}×${width}×${h}`),
@@ -55,8 +57,41 @@ function normalizeCargo(r: Record<string, unknown>, i: number): Cargo {
     width,
     height: h,
     weight: Math.round(num(r.weight, 'weight', i) * 100) / 100,
+    kind: kindOf(r.kind ?? r.package ?? r.type),
   }
+  if (r.name !== undefined) c.name = String(r.name)
+  const cap = r.maxLoad ?? r.bearing ?? r.stackLimit
+  if (cap !== undefined && cap !== null && cap !== '') {
+    const v = Number(cap)
+    if (!Number.isFinite(v) || v < 0) throw new Error(`第 ${i + 1} 件货物的 maxLoad 无效：${String(cap)}`)
+    c.maxLoad = v
+  }
+  if (r.fragile === true || r.fragile === 1 || r.fragile === 'true') c.fragile = true
+  return c
 }
+
+function kindOf(v: unknown): CargoKind {
+  const s = String(v ?? '').toLowerCase()
+  if (s === 'wood' || s.includes('木')) return 'wood'
+  if (s === 'case' || s.includes('特种') || s.includes('军')) return 'case'
+  return 'carton'
+}
+
+const cargoFields = (c: Cargo) => ({
+  id: c.id,
+  rfid: c.rfid,
+  sku: c.sku,
+  name: c.name,
+  kind: c.kind ?? 'carton',
+  length: c.length,
+  width: c.width,
+  height: c.height,
+  weight: c.weight,
+  maxLoad: c.maxLoad,
+  fragile: c.fragile,
+})
+
+const COORD = '货盘坐标系：原点为货盘可用区域左前角（货盘上表面），X 右、Y 远离操作者、Z 上，单位 mm；位置为货物最小角点'
 
 export function exportPlan(res: PlanResult, cargos: Cargo[], pallet: PalletSpec, cons: Constraints): string {
   const byId = new Map(cargos.map((c) => [c.id, c]))
@@ -77,6 +112,9 @@ export function exportPlan(res: PlanResult, cargos: Cargo[], pallet: PalletSpec,
       rotated: p.rotated,
       tipped: p.tipped,
       weight: p.weight,
+      kind: p.kind ?? 'carton',
+      maxLoad: p.maxLoad,
+      topLoad: Math.round(res.metrics.loads[pi] * 10) / 10,
       supporters: res.supporters[pi].map((j) => pl[j].cargoId),
     }
   })
@@ -84,7 +122,7 @@ export function exportPlan(res: PlanResult, cargos: Cargo[], pallet: PalletSpec,
     schemaVersion: '0.1',
     planType: 'palletizing',
     generatedAt: new Date().toISOString(),
-    coordinate: '垛形局部坐标：原点为 1000×1000 垛形区域左前角（货盘上表面），X 右、Y 远离操作者、Z 上，单位 mm；位置为货物最小角点',
+    coordinate: COORD,
     pallet,
     constraints: cons,
     solveStatus: res.layout.remaining.length ? 'PARTIAL' : 'COMPLETE',
@@ -129,7 +167,7 @@ export function orderPayload(orderId: string, cargos: Cargo[]) {
     orderId,
     createdAt: new Date().toISOString(),
     unit: { length: 'mm', weight: 'kg' },
-    cargos: cargos.map((c) => ({ id: c.id, rfid: c.rfid, sku: c.sku, length: c.length, width: c.width, height: c.height, weight: c.weight })),
+    cargos: cargos.map(cargoFields),
   }
 }
 
@@ -142,7 +180,7 @@ export function palletizingPayload(orderId: string, pallets: PalletPlan[], palle
     orderId,
     generatedAt: new Date().toISOString(),
     solveStatus: pallets.some((p) => p.result.layout.remaining.length) ? 'PARTIAL' : 'FEASIBLE',
-    coordinate: '垛形局部坐标：原点为 1000×1000 垛形区域左前角（货盘上表面），X 右、Y 远离操作者、Z 上，单位 mm；位置为货物最小角点',
+    coordinate: COORD,
     palletSpec: pallet,
     constraints: cons,
     pallets: pallets.map((p) => {
@@ -155,7 +193,7 @@ export function palletizingPayload(orderId: string, pallets: PalletPlan[], palle
         palletId: p.id,
         placements: seq.order.map((pi, k) => {
           const q = pl[pi]
-          return { seq: k + 1, cargoId: q.cargoId, rfid: byId.get(q.cargoId)?.rfid, layer: q.layer + 1, x: q.x, y: q.y, z: q.z, size: [q.dx, q.dy, q.dz], rotated: q.rotated, weight: q.weight }
+          return { seq: k + 1, cargoId: q.cargoId, rfid: byId.get(q.cargoId)?.rfid, kind: q.kind ?? 'carton', layer: q.layer + 1, x: q.x, y: q.y, z: q.z, size: [q.dx, q.dy, q.dz], rotated: q.rotated, weight: q.weight, topLoad: Math.round(mt.loads[pi] * 10) / 10, maxLoad: q.maxLoad }
         }),
         pickSequence: seq.order.map((pi) => byId.get(pl[pi].cargoId)?.rfid),
         remainingCargo: p.result.layout.remaining.map((c) => c.rfid),
@@ -169,11 +207,23 @@ export function palletizingPayload(orderId: string, pallets: PalletPlan[], palle
           layerUtilization: mt.layerUtilization.map((u) => +u.toFixed(4)),
           maxLayerOverhang: +mt.maxOverhangRatio.toFixed(4),
           minSupportRatio: +mt.minSupportRatio.toFixed(4),
+          maxLoadRatio: +mt.maxLoadRatio.toFixed(4),
+          volumeUtilization: +mt.volumeUtilization.toFixed(4),
           checks: Object.fromEntries(mt.items.filter((m) => m.pass !== null).map((m) => [m.key, m.pass])),
         },
       }
     }),
     solverInfo: { algoVersion: '0.2.0', elapsedMs: Math.round(pallets.reduce((s, p) => s + p.result.timings.totalMs, 0)) },
+  }
+}
+
+/** 机械臂作业指令（本模块 → 码垛机械臂控制器）：逐盘的取放任务，与具体设备无关 */
+export function robotPayload(orderId: string, pallets: PalletPlan[], cons: Constraints) {
+  return {
+    schemaVersion: '0.2',
+    orderId,
+    generatedAt: new Date().toISOString(),
+    jobs: pallets.map((p) => buildRobotJob(p.id, p.result, p.result.sequences.balance, p.cargos, cons)),
   }
 }
 
@@ -195,7 +245,7 @@ export function parsePalletUnits(text: string): PalletUnit[] {
     const w = Number(r.grossWeight ?? r.weight)
     if (!Number.isFinite(w) || w <= 0) throw new Error(`第 ${i + 1} 个整托的重量无效`)
     const cog = (r.cog ?? {}) as Record<string, unknown>
-    const size = (Array.isArray(r.size) ? r.size : [1219, 1219, 1200]).map(Number) as [number, number, number]
+    const size = (Array.isArray(r.size) ? r.size : [1219, 1219, 1575]).map(Number) as [number, number, number]
     const id = String(r.palletId ?? r.id ?? 'P' + String(i + 1).padStart(2, '0'))
     return {
       id,
