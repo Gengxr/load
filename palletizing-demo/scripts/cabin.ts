@@ -12,8 +12,8 @@ for (const cfg of CABIN_CONFIGS) {
     for (let s = 0; s < seeds; s++) {
       const r = rnd(100 + s)
       const pallets: PalletUnit[] = Array.from({ length: n }, (_, i) => ({
-        id: 'P' + String(i + 1).padStart(2, '0'), rfid: '', weight: 360 + r() * 220,
-        cog: { x: (r() - 0.5) * 60, y: (r() - 0.5) * 60, z: 620 }, size: [1219, 1219, 1500], source: 'PREDICTED' as const,
+        id: 'P' + String(i + 1).padStart(2, '0'), rfid: '', weight: 190 + r() * 150,
+        cog: { x: (r() - 0.5) * 60, y: (r() - 0.5) * 60, z: 500 }, size: [1219, 1219, 1150], source: 'PREDICTED' as const,
       }))
       const plan = planLoading(cfg, pallets)
       method = plan.solver.method

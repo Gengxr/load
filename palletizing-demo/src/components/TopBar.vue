@@ -41,9 +41,8 @@ const tabs = computed(() => {
 })
 const modes = [
   { key: 'plan', name: '规划演示', icon: 'cube' },
-  { key: 'compare', name: '方案对比', icon: 'compare' },
-  { key: 'station', name: '人工引导', icon: 'hand' },
-  { key: 'robot', name: '机械臂', icon: 'robot' },
+  { key: 'compare', name: '顺序对比', icon: 'compare' },
+  { key: 'station', name: '工位引导', icon: 'station' },
 ] as const
 const running = computed(() => tasks.filter((t) => t.status === 'running' || t.status === 'queued').length)
 const initial = computed(() => (state.user?.name ?? '?').slice(0, 1))

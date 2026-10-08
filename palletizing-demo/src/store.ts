@@ -1,17 +1,16 @@
 import { computed, reactive, shallowRef } from 'vue'
-import type { Cargo, Constraints, PlanResult, SequenceResult, SequenceStrategy } from './algo/types'
-import { DEFAULT_CONSTRAINTS, DEFAULT_PALLET, DEFAULT_SEQUENCE, ENVELOPES } from './algo/defaults'
+import type { Cargo, PlanResult, SequenceResult, SequenceStrategy } from './algo/types'
+import { DEFAULT_CONSTRAINTS, DEFAULT_PALLET, DEFAULT_SEQUENCE } from './algo/defaults'
 import { DEFAULT_GEN, generateCargos, type GenParams } from './algo/generator'
 import { DEFAULT_ALLOC, type AllocParams, type AllocationResult } from './algo/allocate'
 import { planOrder, toPalletUnit, palletId, type PalletPlan } from './algo/pipeline'
 import { CABIN_CONFIGS, evaluatePlan, planLoading, type Assignment, type CabinConfig, type LoadingPlan, type PalletUnit, type Yaw } from './algo/cabin'
 import { colorForSku } from './viz/palette'
-import type { RobotState } from './viz/RobotArm'
 import { addTask, finishTask, planMany, submitPlan, type Task } from './taskPool'
 import { load, save, uid } from './persist'
 
 export type Workspace = 'order' | 'pallet' | 'cabin' | 'data'
-export type ViewMode = 'plan' | 'compare' | 'station' | 'robot'
+export type ViewMode = 'plan' | 'compare' | 'station'
 export type DataTab = 'datasets' | 'history' | 'api' | 'settings'
 
 // ───────────────────────── 出库清单预设 ─────────────────────────
@@ -23,30 +22,15 @@ export interface OrderPreset {
   icon: string
   gen: Partial<GenParams>
   alloc: Partial<AllocParams>
-  /** 货盘可用空间口径（缺省 = 本项目 1200×1200×1500） */
-  cons?: Partial<Constraints>
 }
 
 export const ORDER_PRESETS: OrderPreset[] = [
-  { key: 'standard', name: '应急救援物资', desc: '6 盘 · 8 规格', icon: 'boxes', gen: { mode: 'standard', skuCount: 8, pallets: 6, fillRatio: 0.86, seed: 20261006 }, alloc: {} },
-  { key: 'mixed', name: '综合保障物资', desc: '5 盘 · 12 规格', icon: 'grid', gen: { mode: 'mixed', skuCount: 12, pallets: 5, fillRatio: 0.85, seed: 20261104 }, alloc: {} },
-  { key: 'bulk', name: '大批量投送', desc: '8 盘 · 10 规格', icon: 'layers', gen: { mode: 'standard', skuCount: 10, pallets: 8, fillRatio: 0.86, seed: 20261108 }, alloc: {} },
-  {
-    key: 'fig21',
-    name: '图 2-1 复现',
-    desc: '单盘 · 同规格',
-    icon: 'grid3',
-    gen: { mode: 'single', singleIndex: 3, singleHeight: 200, pallets: 1, seed: 20261052, fx: 1000, fy: 1000, targetHeight: 1100 },
-    alloc: { fixedPallets: 1 },
-    cons: ENVELOPES.spec,
-  },
+  { key: 'standard', name: '标准出库单', desc: '6 盘 · 8 规格', icon: 'boxes', gen: { mode: 'standard', skuCount: 8, pallets: 6, fillRatio: 0.86, seed: 20261006 }, alloc: {} },
+  { key: 'mixed', name: '多规格混装', desc: '5 盘 · 12 规格', icon: 'grid', gen: { mode: 'mixed', skuCount: 12, pallets: 5, fillRatio: 0.85, seed: 20261003 }, alloc: {} },
+  { key: 'bulk', name: '大批量出库', desc: '8 盘 · 10 规格', icon: 'layers', gen: { mode: 'standard', skuCount: 10, pallets: 8, fillRatio: 0.86, seed: 20261008 }, alloc: {} },
+  { key: 'fig21', name: '图 2-1 复现', desc: '单盘 · 同规格', icon: 'grid3', gen: { mode: 'single', singleIndex: 3, singleHeight: 200, pallets: 1, seed: 20261052 }, alloc: { fixedPallets: 1 } },
   { key: 'random', name: '随机尺寸', desc: '单盘 · 压力测试', icon: 'shuffle', gen: { mode: 'random', fillRatio: 0.76, heightStep: 50, pallets: 1, seed: 20261052 }, alloc: { fixedPallets: 1 } },
 ]
-
-/** 切换预设时，货盘可用空间跟着预设走（其余约束参数保持用户的设置） */
-function applyEnvelope(key: string) {
-  Object.assign(state.cons, ENVELOPES.project, ORDER_PRESETS.find((x) => x.key === key)?.cons ?? {})
-}
 
 export interface Order {
   id: string
@@ -144,12 +128,8 @@ export const state = reactive({
   speed: 1,
   strategy: 'balance' as SequenceStrategy,
   mode: 'plan' as ViewMode,
-  /** 方案对比的对照对象：逐层行扫描（只比顺序）或经典算法 DBLF（整体对比） */
-  compareBase: 'layer-row' as 'layer-row' | 'dblf',
   showLabels: false,
   showCog: true,
-  /** 承压热力图：按"压重 / 承压上限"给货物着色 */
-  showHeat: false,
   autoRotate: false,
   layerLimit: null as number | null,
   selectedLayer: null as number | null,
@@ -178,8 +158,6 @@ export const allocation = shallowRef<AllocationResult | null>(null)
 export const pallets = shallowRef<PalletPlan[]>([])
 export const runInfo = shallowRef<{ rounds: number; rerouted: number; elapsedMs: number; unplaced: number } | null>(null)
 export const pipelineTasks = shallowRef<Task[]>([])
-/** 机械臂当前的关节角与抓取状态（机械臂模式下由三维视图实时回报） */
-export const robotPose = shallowRef<RobotState | null>(null)
 export const loading = shallowRef<LoadingPlan | null>(null)
 /** 求解器给出的最优方案（人工调整后可一键恢复） */
 export const loadingBest = shallowRef<LoadingPlan | null>(null)
@@ -190,7 +168,7 @@ export const customConfigs = shallowRef<CabinConfig[]>([])
 export interface ApiLog {
   id: number
   time: number
-  sys: 'wms' | 'cabin' | 'robot'
+  sys: 'wms' | 'cabin'
   dir: 'in' | 'out'
   method: string
   path: string
@@ -214,7 +192,7 @@ export const cargos = computed<Cargo[]>(() => current.value?.cargos ?? [])
 export const planCargos = cargos
 export const result = computed<PlanResult | null>(() => current.value?.result ?? null)
 export const allCargos = computed<Cargo[]>(() => order.value?.cargos ?? [])
-export const skuColors = computed(() => colorForSku(allCargos.value.map((c) => c.sku), allCargos.value.map((c) => c.kind)))
+export const skuColors = computed(() => colorForSku(allCargos.value.map((c) => c.sku)))
 export const cargoById = computed(() => new Map(allCargos.value.map((c) => [c.id, c])))
 
 export const currentSeq = computed<SequenceResult | null>(() => {
@@ -300,7 +278,6 @@ export function applyPreset(key: string) {
   state.importName = ''
   Object.assign(state.gen, DEFAULT_GEN, p.gen)
   Object.assign(state.alloc, DEFAULT_ALLOC, p.alloc)
-  applyEnvelope(key)
 }
 
 export function rerollSeed() {
@@ -316,7 +293,6 @@ export function importOrder(name: string, list: Cargo[]) {
   state.preset = 'import'
   state.importName = name
   Object.assign(state.alloc, DEFAULT_ALLOC)
-  applyEnvelope('import')
   order.value = { id: nextOrderId(), name: name.replace(/\.json$/i, ''), source: '外部导入', createdAt: Date.now(), cargos: list }
 }
 
@@ -363,7 +339,6 @@ export async function loadDataset(id: string) {
     state.importName = ''
     Object.assign(state.gen, DEFAULT_GEN, d.gen)
     Object.assign(state.alloc, DEFAULT_ALLOC, d.alloc ?? {})
-    applyEnvelope(state.preset)
     generateOrder()
   } else if (d.cargos) {
     importOrder(d.name, d.cargos)
@@ -392,7 +367,6 @@ export async function replay(h: HistoryRec) {
     state.importName = ''
     Object.assign(state.gen, DEFAULT_GEN, h.gen)
     Object.assign(state.alloc, DEFAULT_ALLOC, h.alloc ?? {})
-    applyEnvelope(state.preset)
     if (configs.value.some((c) => c.id === h.cabin)) state.cabinId = h.cabin
     generateOrder()
     state.ws = 'order'
@@ -434,12 +408,7 @@ export async function runPipeline() {
       { ...state.pallet },
       { ...state.cons },
       { ...state.seq },
-      {
-        ...state.alloc,
-        maxPallets: state.alloc.fixedPallets ? 0 : Math.max(slots, ...configs.value.map((c) => c.slots.length)),
-        // 单盘货重不超过货位限重（扣除货盘自重）
-        maxPalletWeight: state.alloc.maxPalletWeight || Math.max(0, Math.min(...cabin.value.slots.map((s) => s.maxWeight)) - state.pallet.tareWeight),
-      },
+      { ...state.alloc, maxPallets: state.alloc.fixedPallets ? 0 : Math.max(slots, ...configs.value.map((c) => c.slots.length)) },
       (inputs, onDone) => {
         const base = pipelineTasks.value.length
         const titles = inputs.map((inp, k) => `码盘规划 · 第 ${state.round} 轮 · ${inp.cargos.length} 件 #${base + k + 1}`)
@@ -463,11 +432,8 @@ export async function runPipeline() {
     pallets.value = res.pallets
     runInfo.value = { rounds: res.rounds, rerouted: res.rerouted, elapsedMs: res.elapsedMs, unplaced: res.unplaced.length }
     state.focus = -1
-    // 单盘视图默认打开包装类型最丰富的一盘（同样丰富时取件数最多的）
-    const rich = (p: PalletPlan) => new Set(p.cargos.map((c) => c.kind ?? 'carton')).size * 1000 + p.cargos.length
-    resetPalletView(res.pallets.reduce((b, p, i) => (rich(p) > rich(res.pallets[b]) ? i : b), 0))
+    resetPalletView(0)
     logApi('wms', 'out', 'POST', '{wms}/palletizing-plans', 200, `码盘方案 PP-${o.id} · ${res.pallets.length} 盘及散货出库顺序`)
-    logApi('robot', 'out', 'POST', '{robot}/palletizing-jobs', 200, `机械臂作业指令 · ${res.pallets.length} 盘 · ${res.pallets.reduce((s, p) => s + p.result.layout.placements.length, 0)} 条取放任务`)
     // 货位不够时自动换用更大的构型
     if (res.pallets.length > cabin.value.slots.length) {
       const bigger = [...configs.value].sort((a, b) => a.slots.length - b.slots.length).find((c) => c.slots.length >= res.pallets.length)

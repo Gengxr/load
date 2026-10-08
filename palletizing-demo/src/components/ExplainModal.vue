@@ -9,7 +9,7 @@ import Icon from './Icon.vue'
 import BalanceChart from './BalanceChart.vue'
 
 const tab = ref(0)
-const tabs = ['整体流程', '多盘分配', '单盘布局与承压', '码放顺序', '舱内装载', '指标与接口']
+const tabs = ['整体流程', '多盘分配', '单盘布局', '码放顺序', '舱内装载', '指标与接口']
 
 function close() {
   state.explainOpen = false
@@ -64,9 +64,8 @@ const sampleIn = `{
     { "palletNo": 1,
       "cargos": [
         { "id": "C0001", "rfid": "E2000017221101441890",
-          "sku": "S01", "name": "药品", "kind": "carton",
-          "length": 400, "width": 300, "height": 200,
-          "weight": 8.5, "maxLoad": 41, "fragile": false }
+          "sku": "S01", "length": 400, "width": 300,
+          "height": 200, "weight": 8.5 }
       ] }
   ]
 }`
@@ -84,21 +83,6 @@ const sampleOut = `{
   "metrics": { "cogOffset": { "display": "X +0.7% · Y +0.9%", "pass": true } },
   "process": { "balance": { "peakRatio": 0.009 } }
 }`
-const sampleRobot = `{
-  "schema": "palletizing-robot-job/1.0",
-  "palletId": "P01",
-  "frames": { "pallet": "原点 = 货盘可用区域左前角…",
-              "pick": "原点 = 输送线末端定位挡块…" },
-  "tasks": [
-    { "seq": 1, "rfid": "E2000017221101441890",
-      "kind": "carton", "size": [400, 300, 200], "weight": 8.5,
-      "pick":  { "x": -200, "y": 0, "z": 200, "rz": 0 },
-      "place": { "x": 200, "y": 150, "z": 200, "rz": 0 },
-      "transferZ": 320, "approachZ": 320,
-      "gripper": { "type": "vacuum", "value": 2 },
-      "speed": 1, "after": [] }
-  ]
-}`
 </script>
 
 <template>
@@ -114,9 +98,8 @@ const sampleRobot = `{
 
       <section v-if="tab === 0" class="body scroll">
         <p class="lead">
-          从一张<b>出库清单</b>（每件货物的尺寸、重量和属性）出发，系统自动回答三个问题：这些货物<b class="c">分成几盘、每盘放哪些</b>；每一盘上<b class="c">每件放在哪、按什么顺序放</b>；
-          码好的整托<b class="c">放进货舱的哪个货位、按什么顺序装载和投放</b>。结果同时兼顾空间利用率、码放平衡、货物承压和飞机重心包线，
-          并且既能给人工码放做指引，也能直接交给机械臂执行。
+          从一张<b>出库清单</b>出发，系统自动回答三个问题：这些货物<b class="c">分成几盘、每盘放哪些</b>；每一盘上<b class="c">每件放在哪、按什么顺序放</b>；
+          码好的整托<b class="c">放进货舱的哪个货位、按什么顺序装载和投放</b>。三步的结果同时满足码盘约束和舱内装载约束。
         </p>
         <div class="flow">
           <div class="node in"><em>输入</em>出库清单<small>仓储系统 / 模拟生成</small></div>
@@ -139,11 +122,7 @@ const sampleRobot = `{
             <div class="node">过程校验<small>装载、投放、卸载</small></div>
           </div>
           <div class="arr" />
-          <div class="group out2">
-            <div class="gt">④ 同一份方案，两种落地方式</div>
-            <div class="node">人工引导<small>动画提示 + 脚踏确认</small></div>
-            <div class="node">机械臂<small>取放指令直接执行</small></div>
-          </div>
+          <div class="node out"><em>输出</em>码盘与装载方案<small>位置 · 顺序 · 指标</small></div>
         </div>
         <div class="cols">
           <div class="col">
@@ -156,9 +135,9 @@ const sampleRobot = `{
           <div class="col">
             <h4>为什么过程也要算</h4>
             <p>
-              只看最终结果是不够的：码放途中重心长时间偏向一侧不利于操作和称重，装载或投放途中重心越出包线会影响飞行安全。
+              只看最终结果是不够的：码放途中重心偏向一侧会倾覆，装载或投放途中重心越出包络会影响飞行安全。
               因此单盘按"每放一件"、舱内按"每移动一个整托"逐步校核重心。
-              <template v-if="r">当前货盘上，按"逐层行扫描"码放的过程峰值偏心为 <b class="b">{{ pct(r.sequences.baseline.summary.peakRatio) }}</b>，本方案为 <b class="c">{{ pct(r.sequences.balance.summary.peakRatio) }}</b>。</template>
+              <template v-if="r">当前货盘上，传统逐层码放的过程峰值偏心为 <b class="b">{{ pct(r.sequences.baseline.summary.peakRatio) }}</b>，本方案为 <b class="c">{{ pct(r.sequences.balance.summary.peakRatio) }}</b>。</template>
             </p>
           </div>
           <div class="col">
@@ -171,8 +150,8 @@ const sampleRobot = `{
         </div>
         <div v-if="r" class="band">
           <div class="bi"><b class="num">{{ gallery.filter((g) => g.got >= g.n).length }}/14</b><span>复现技术要求图 2-1 的堆码件数</span></div>
-          <div class="bi"><b class="num">{{ passPallets ? `${passPallets.pass}/${passPallets.pallets}` : '—' }}</b><span>货盘通过全部必达指标（表 2-2 与承压）</span></div>
-          <div class="bi"><b class="num g">↓{{ (reduce * 100).toFixed(0) }}%</b><span>码放过程峰值偏心（对比逐层行扫描）</span></div>
+          <div class="bi"><b class="num">{{ passPallets ? `${passPallets.pass}/${passPallets.pallets}` : '—' }}</b><span>货盘通过表 2-2 全部码盘指标</span></div>
+          <div class="bi"><b class="num g">↓{{ (reduce * 100).toFixed(0) }}%</b><span>码放过程峰值偏心（对比传统逐层）</span></div>
           <div class="bi"><b class="num">{{ lp ? signedPct(lp.metrics.errX, 2) : '—' }}</b><span>舱内货物重心长向误差（要求 ≤ ±10%）</span></div>
         </div>
       </section>
@@ -184,14 +163,14 @@ const sampleRobot = `{
         </p>
         <div v-if="stacks.length" class="stacks">
           <div v-for="g in stacks" :key="g.no" class="stk">
-            <div class="col2" :style="{ height: (g.h / state.cons.maxStackHeight) * 168 + 'px' }">
+            <div class="col2" :style="{ height: (g.h / 1200) * 168 + 'px' }">
               <i v-for="(u, k) in g.units" :key="k" :class="u.kind" :style="{ flex: u.h, background: u.kind === 'full' ? u.color : undefined }" :title="`${u.label} · ${u.n} 件 · 高 ${Math.round(u.h)} mm`" />
             </div>
             <b class="num">P{{ String(g.no).padStart(2, '0') }}</b>
             <span class="num">{{ g.h }} mm</span>
             <span class="num">{{ g.kg.toFixed(0) }} kg</span>
           </div>
-          <div class="lim"><span>垛高上限 {{ state.cons.maxStackHeight }}</span></div>
+          <div class="lim"><span>垛高上限 1200</span></div>
           <div class="leg">
             <span><i class="full" />整层（同规格最优图案）</span>
             <span><i class="mixed" />混合层（同高零头拼成）</span>
@@ -222,7 +201,7 @@ const sampleRobot = `{
             </p>
           </div>
         </div>
-        <p class="note">盘数下界按体积估算为 {{ allocation?.stats.lowerBound ?? '—' }} 盘；实际盘数还要满足垛高不超过 {{ state.cons.maxStackHeight }} mm、每层利用率 ≥ 80%、货位限重等约束，因此可能多 1 盘。分配目标可在"参数"中切换为"尽量码满"。</p>
+        <p class="note">盘数下界按体积估算为 {{ allocation?.stats.lowerBound ?? '—' }} 盘；实际盘数还要满足垛高 1000–1200 mm、每层利用率 ≥ 80% 等码盘约束，因此可能多 1 盘。分配目标可在"参数"中切换为"尽量码满"。</p>
       </section>
 
       <section v-else-if="tab === 2" class="body scroll">
@@ -247,32 +226,7 @@ const sampleRobot = `{
             </div>
           </div>
         </div>
-        <p class="note">
-          上图按技术要求图 2-1 的口径计算：相对 1000×1000 承载面。本项目的货盘可用空间是 {{ state.cons.footprintX }}×{{ state.cons.footprintY }}×{{ state.cons.maxStackHeight }} mm，
-          算法相同，只是把边界换成这个尺寸。混合规格的层采用 MaxRects 装填并与同规格图案竞争，择优选用。
-        </p>
-        <div class="cols two">
-          <div class="col">
-            <h4>货物承压：下面的不能被压坏</h4>
-            <p>
-              每件货物都带一个<b>承压上限</b>（顶面最多能压多重）。一件货物把"自重 + 它顶上的压重"按接触面积分给正下方托住它的各件，
-              从上往下逐件累加，就得到每件实际承受的压重。算法分三步保证不超限：选层时让<b class="c">耐压的层排在下面</b>；
-              排好之后若还有超限，把不耐压的层往上换；仍然压不住时，把最顶上的货物卸下、转到别的货盘，不会硬压。
-              <template v-if="r">
-                当前货盘最大承压比 <b :class="r.metrics.overloaded ? 'b' : 'g'">{{ pct(r.metrics.maxLoadRatio, 0) }}</b>，超限 <b :class="r.metrics.overloaded ? 'b' : 'g'">{{ r.metrics.overloaded }}</b> 件。
-              </template>
-              在三维视图右侧工具栏点"承压热力图"，可以看到每件货物被压到了上限的百分之几。
-            </p>
-          </div>
-          <div class="col">
-            <h4>三类包装，属性不同</h4>
-            <p>
-              货物都是规则的直方体，包装分<b>纸箱</b>、<b>木箱</b>和<b>军用特种箱</b>。类型决定三件事：承压能力（木箱和特种箱耐压，纸箱较弱，标了"怕压"的只能放在最上面）；
-              三维里的外观；机械臂的抓取方式（纸箱用吸盘，木箱和特种箱用夹抱）和搬运速度。
-              导入出库清单时，每件货物可以带 kind、maxLoad、fragile 三个属性；不给承压上限的货物按不限处理。
-            </p>
-          </div>
-        </div>
+        <p class="note">利用率按图 2-1 的口径计算：相对 1000×1000 承载面。混合规格的层则采用 MaxRects 装填并与同规格图案竞争，择优选用。</p>
       </section>
 
       <section v-else-if="tab === 3" class="body scroll">
@@ -327,7 +281,7 @@ const sampleRobot = `{
               <li><b>增量重心</b>：每扩展一件只需 O(1) 更新力矩，几百件货物毫秒级完成。</li>
               <li><b>封闭孔位前瞻</b>：避免把某个空位四面围死，工人还得把箱子"塞"进去。</li>
               <li><b>允许跨层</b>：不必一层码满再码下一层；下层局部完成后，可以先码上层来配平（参数可设为严格逐层）。</li>
-              <li><b>中心向外生长</b>：优化结果自然呈现"先中间、后四周、左右交替"的规律，与现场码放的经验一致。</li>
+              <li><b>中心向外生长</b>：优化结果自然呈现"先中间、后四周、左右交替"的规律，与会上讨论的经验一致。</li>
             </ul>
           </div>
         </div>
@@ -335,17 +289,11 @@ const sampleRobot = `{
           <div class="live-h">
             <b>当前这批货物</b>：
             <span class="o">本方案</span> 过程峰值 {{ pct(r.sequences.balance.summary.peakRatio) }} ·
-            <span class="bb">逐层行扫描</span> 过程峰值 {{ pct(r.sequences.baseline.summary.peakRatio) }} ·
+            <span class="bb">传统逐层</span> 过程峰值 {{ pct(r.sequences.baseline.summary.peakRatio) }} ·
             超出 ±10% 的步数 {{ r.sequences.balance.summary.exceedSteps }} vs {{ r.sequences.baseline.summary.exceedSteps }}
           </div>
-          <BalanceChart :ours="r.sequences.balance.steps.ratio" :base="r.sequences.baseline.steps.ratio" :warmup="r.sequences.balance.summary.warmupSteps" :k="r.sequences.balance.steps.ratio.length - 1" :tol="state.cons.cogOffsetRatioMax" :height="150" />
+          <BalanceChart :ours="r.sequences.balance.steps.ratio" :base="r.sequences.baseline.steps.ratio" :k="r.sequences.balance.steps.ratio.length - 1" :tol="state.cons.cogOffsetRatioMax" :height="150" />
         </div>
-        <p class="note">
-          <b>起步阶段</b>（图中浅黄色区域）：货盘上的货物还不到整盘重量的 20% 时，放下一件较重的货物就会让重心明显偏移，这在物理上无法避免，而此时偏载力矩很小，
-          所以这几步不计入"过程峰值"和"超限步数"，但曲线照常画出。
-          <b>和谁比</b>："逐层行扫描"是自定义的对照基线（同一个垛形，只换顺序），不是某项标准；在"方案对比"里还可以和文献中常用的经典装箱算法
-          DBLF（Karabulut 与 İnceoğlu，2004）做整体对比，它的位置和顺序都由它自己生成。
-        </p>
       </section>
 
       <section v-else-if="tab === 4" class="body scroll">
@@ -419,27 +367,9 @@ const sampleRobot = `{
             <pre>{{ sampleOut }}</pre>
           </div>
         </div>
-        <div class="cols two">
-          <div class="col">
-            <h4>输出：机械臂作业指令（与设备无关）</h4>
-            <pre>{{ sampleRobot }}</pre>
-          </div>
-          <div class="col">
-            <h4>一份方案，两种落地方式</h4>
-            <p>
-              <b>人工引导</b>：工位大屏按顺序逐件提示——RFID 末 6 位、规格、层号、朝向和俯视位置图，工人放好后踩脚踏确认，可回退、可上报异常。
-            </p>
-            <p>
-              <b>机械臂</b>：同一份方案展开成逐件的取放指令。位姿用<b class="c">货盘坐标系 / 取料坐标系下的工具中心点</b>表示，
-              只需在现场标定这两个坐标系，机械臂控制器就能按顺序直接执行；每件都是"抬到安全高度 → 平移 → 竖直放下"，途中不会碰到已码好的货物，
-              指令里还给出抓取方式、速度档和所需的工作空间与负载，用来核对机械臂选型。可导出 JSON 或 CSV 路径点表。
-            </p>
-          </div>
-        </div>
         <p class="note">
-          待与甲方确认的口径：① 利用率分母（按货盘可用区域 {{ state.cons.footprintX }}×{{ state.cons.footprintY }} 逐层计算、顶层不计）；② 重心偏移基准长度（货盘边长或可用区域边长，可切换）；
-          ③ 支撑率下限等稳定性阈值（研发假设 80%）；④ 重心高度是否含货盘自重（本 Demo 含）；⑤ 各类货物的承压上限（本 Demo 为示例值，正式数据由出库清单给出）；
-          ⑥ 机械臂的型号、取料点位置与通信协议（指令本身与设备无关，现场只需标定坐标系）。
+          待与甲方确认的口径：① 利用率分母（本 Demo 按图 2-1 取 1000×1000，逐层、顶层不计）；② 重心偏移基准长度（1219 或 1000，可切换）；
+          ③ 支撑率下限等稳定性阈值（研发假设 80%）；④ 重心高度是否含货盘自重（本 Demo 含）。
         </p>
       </section>
     </div>
@@ -533,20 +463,9 @@ b.g {
   color: var(--accent);
   font-weight: 600;
 }
-.group.out2 {
-  border-style: solid;
-  border-color: rgba(34, 211, 238, 0.35);
-  background: linear-gradient(160deg, rgba(34, 211, 238, 0.1), rgba(59, 130, 246, 0.04));
-}
-.flow .node {
-  white-space: nowrap;
-}
-.flow .node small {
-  white-space: normal;
-}
 .node.in,
 .node.out {
-  min-width: 112px;
+  min-width: 140px;
   background: linear-gradient(160deg, rgba(34, 211, 238, 0.12), rgba(59, 130, 246, 0.05));
   border-color: rgba(34, 211, 238, 0.35);
 }

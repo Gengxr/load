@@ -22,15 +22,12 @@ const readout = computed(() => {
     dx: (s.steps.cogX[k] - fx / 2) / base,
     dy: (s.steps.cogY[k] - fy / 2) / base,
     ratio: s.steps.ratio[k],
-    // 起步阶段（盘上货物不足整盘的 20%）不计入过程峰值
-    warm: k > 0 && k <= s.summary.warmupSteps,
-    peak: k > s.summary.warmupSteps ? Math.max(...s.steps.ratio.slice(s.summary.warmupSteps + 1, k + 1)) : 0,
+    peak: Math.max(...s.steps.ratio.slice(0, k + 1)),
     mass: s.steps.mass[k],
     hRatio: k === 0 ? 0 : (s.steps.cogZ[k] + state.pallet.height) / (top + state.pallet.height),
   }
 })
-const over = computed(() => (readout.value?.ratio ?? 0) > state.cons.cogOffsetRatioMax)
-const bad = computed(() => over.value && !readout.value?.warm)
+const bad = computed(() => (readout.value?.ratio ?? 0) > state.cons.cogOffsetRatioMax)
 const color = computed(() => (seq.value?.strategy === 'layer-row' ? BASELINE : ACCENT))
 </script>
 
@@ -48,15 +45,14 @@ const color = computed(() => (seq.value?.strategy === 'layer-row' ? BASELINE : A
         :fy="state.cons.footprintY"
         :tol-half="tolHalf"
         :tol-ratio="state.cons.cogOffsetRatioMax"
-        :warmup="seq.summary.warmupSteps"
         :color="color"
         :size="118"
       />
       <div class="rd">
-        <div class="big num" :class="bad ? 'bad' : over ? 'warm' : 'ok'">{{ pct(readout.ratio) }}</div>
-        <div class="cap" :title="readout.warm ? '起步阶段：盘上货物还不到整盘的 20%，重心对单件位置很敏感而偏载力矩很小，不计入过程峰值' : ''">{{ readout.warm ? '起步阶段 · 不计入峰值' : `当前偏心 · 容差 ±${pct(state.cons.cogOffsetRatioMax, 0)}` }}</div>
+        <div class="big num" :class="bad ? 'bad' : 'ok'">{{ pct(readout.ratio) }}</div>
+        <div class="cap">当前偏心 · 容差 ±{{ pct(state.cons.cogOffsetRatioMax, 0) }}</div>
         <div class="kv num"><span>X / Y</span><b>{{ signedPct(readout.dx) }} / {{ signedPct(readout.dy) }}</b></div>
-        <div class="kv num"><span>过程峰值</span><b>{{ readout.warm ? '—' : pct(readout.peak) }}</b></div>
+        <div class="kv num"><span>过程峰值</span><b>{{ pct(readout.peak) }}</b></div>
         <div class="kv num"><span>重心高度</span><b>{{ readout.hRatio ? pct(readout.hRatio) : '—' }}</b></div>
         <div class="kv num"><span>当前总重</span><b>{{ readout.mass.toFixed(1) }} kg</b></div>
       </div>
@@ -112,9 +108,6 @@ const color = computed(() => (seq.value?.strategy === 'layer-row' ? BASELINE : A
 }
 .big.ok {
   color: var(--ok);
-}
-.big.warm {
-  color: var(--warn);
 }
 .big.bad {
   color: var(--bad);

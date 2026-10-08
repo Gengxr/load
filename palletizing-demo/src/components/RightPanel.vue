@@ -22,8 +22,6 @@ interface Tile {
   mark: number
   band?: [number, number]
   note: string
-  /** 仅供参考，不计入达标数 */
-  ref?: boolean
 }
 
 const tiles = computed<Tile[]>(() => {
@@ -43,22 +41,10 @@ const tiles = computed<Tile[]>(() => {
     { key: 'utilization', name: '货盘利用率', value: pct(m.minLayerUtilization), sub: `平均 ${pct(mean)}`, limit: `≥ ${pct(c.utilizationMin, 0)} · 逐层最低`, pass: !!it.utilization?.pass, fill: Math.min(1, m.minLayerUtilization), mark: c.utilizationMin, note: it.utilization?.note ?? '' },
     { key: 'envelope', name: '垛形外边界', value: `${m.stackSize[2]} mm`, sub: `${m.stackSize[0]}×${m.stackSize[1]}`, limit: `≤ ${c.footprintX}×${c.footprintY}×${c.maxStackHeight}`, pass: !!it.envelope?.pass, fill: Math.min(1, m.stackSize[2] / 1300), mark: c.maxStackHeight / 1300, band: [c.minStackHeight / 1300, c.maxStackHeight / 1300], note: it.envelope?.note ?? '' },
     { key: 'overhang', name: '码盘垛形误差', value: pct(Math.max(0, m.maxOverhangRatio)), sub: '上层最大外扩', limit: `≤ ${pct(c.overhangRatioMax, 0)}`, pass: !!it.overhang?.pass, ...low(Math.max(0, m.maxOverhangRatio), c.overhangRatioMax), note: '' },
-    {
-      key: 'bearing',
-      name: '货物承压',
-      value: pct(m.maxLoadRatio, 0),
-      sub: m.overloaded ? `${m.overloaded} 件超限` : '无超限 · 点击看热力图',
-      limit: '压重 ≤ 承压上限',
-      pass: it.bearing?.pass !== false,
-      ...low(m.maxLoadRatio, 1),
-      note: it.bearing?.note ?? '',
-    },
-    { key: 'volume', name: '空间利用率', value: pct(m.volumeUtilization), sub: `货物 ${(res.layout.placements.reduce((s, p) => s + p.dx * p.dy * p.dz, 0) / 1e9).toFixed(2)} m³`, limit: '参考', pass: true, fill: Math.min(1, m.volumeUtilization), mark: 1, note: it.volume?.note ?? '', ref: true },
     { key: 'time', name: '方案生成用时', value: sec < 1 ? `${res.timings.totalMs.toFixed(0)} ms` : `${sec.toFixed(2)} s`, sub: `${res.layout.placements.length} 件`, limit: '≤ 120 s / 垛', pass: !!it.time?.pass, fill: Math.max(0.012, Math.min(1, sec / 150)), mark: 0.8, note: '' },
   ]
 })
-const required = computed(() => tiles.value.filter((t) => !t.ref))
-const passCount = computed(() => required.value.filter((t) => t.pass).length)
+const passCount = computed(() => tiles.value.filter((t) => t.pass).length)
 const stability = computed(() => {
   const m = r.value?.metrics
   if (!m) return []
@@ -122,15 +108,15 @@ function download() {
             <Icon name="gauge" :size="17" />
             <span>技术指标自动报告</span>
           </div>
-          <span class="score num" :class="{ ok: passCount === required.length }">{{ passCount }}/{{ required.length }} 达标</span>
+          <span class="score num" :class="{ ok: passCount === tiles.length }">{{ passCount }}/{{ tiles.length }} 达标</span>
           <button class="btn icon ghost close" title="收起 (M)" @click="state.metricsOpen = false"><Icon name="x" :size="16" /></button>
         </header>
-        <div class="src">依据《技术要求》表 2-2 与货物承压要求，软件自动计算并判定</div>
+        <div class="src">依据《技术要求》表 2-2，软件自动计算并判定</div>
         <div class="tiles">
-          <div v-for="t in tiles" :key="t.key" class="tile" :class="{ bad: !t.pass, link: t.key === 'bearing', on: t.key === 'bearing' && state.showHeat }" :title="t.note" @click="t.key === 'bearing' && (state.showHeat = !state.showHeat)">
+          <div v-for="t in tiles" :key="t.key" class="tile" :class="{ bad: !t.pass }" :title="t.note">
             <div class="t-n">
               <span>{{ t.name }}</span>
-              <i class="dot" :class="t.ref ? 'ref' : t.pass ? 'ok' : 'bad'" />
+              <i class="dot" :class="t.pass ? 'ok' : 'bad'" />
             </div>
             <div class="t-v num">{{ t.value }}</div>
             <div class="bar">
@@ -167,14 +153,13 @@ function download() {
             <b class="num">↓{{ (reduce * 100).toFixed(0) }}%</b>
           </div>
           <div class="vs-c b">
-            <span>对照 · 逐层行扫描</span>
+            <span>传统逐层 · 过程峰值</span>
             <b class="num">{{ pct(base!.peakRatio) }}</b>
           </div>
         </div>
         <BalanceChart
           :ours="r.sequences.balance.steps.ratio"
           :base="r.sequences.baseline.steps.ratio"
-          :warmup="bal!.warmupSteps"
           :k="state.step"
           :tol="state.cons.cogOffsetRatioMax"
           :height="112"
@@ -185,12 +170,6 @@ function download() {
           <span>平均偏心 <b>{{ pct(bal!.meanRatio) }}</b> / <em>{{ pct(base!.meanRatio) }}</em></span>
           <span>换层 <b>{{ bal!.layerJumps }}</b> 次</span>
         </div>
-        <button class="dblf num" title="与公认的经典装箱算法 DBLF 做整体对比（位置和顺序都由它生成）" @click="((state.compareBase = 'dblf'), (state.mode = 'compare'))">
-          <span>经典算法 DBLF</span>
-          <span>过程峰值 <em>{{ pct(r.dblf.sequence.summary.peakRatio) }}</em></span>
-          <span>承压超限 <em>{{ r.dblf.metrics.overloaded }} 件</em></span>
-          <span class="go">对比 ›</span>
-        </button>
       </section>
 
       <section class="glass card">
@@ -555,43 +534,5 @@ function download() {
   margin-top: 12px;
   font-size: 11px;
   color: var(--text-3);
-}
-.dblf {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  margin-top: 10px;
-  padding: 7px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.03);
-  font-size: 11.5px;
-  color: var(--text-3);
-  white-space: nowrap;
-}
-.dblf:hover {
-  border-color: rgba(255, 113, 137, 0.4);
-  background: rgba(251, 113, 133, 0.08);
-}
-.dblf span:first-child {
-  color: var(--text-2);
-  font-weight: 600;
-}
-.dblf em {
-  font-style: normal;
-  font-weight: 600;
-  color: var(--base);
-}
-.dblf .go {
-  color: var(--accent);
-}
-.tile.link {
-  cursor: pointer;
-}
-.tile.link:hover,
-.tile.link.on {
-  border-color: rgba(46, 224, 240, 0.45);
 }
 </style>

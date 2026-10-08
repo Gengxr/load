@@ -6,7 +6,6 @@ import { exportPlan } from '../algo/io'
 import { download } from '../persist'
 import CogCard from './CogCard.vue'
 import Icon from './Icon.vue'
-import { KIND_NAME, type CargoKind } from '../algo/types'
 
 /** 单盘码放 · 左侧面板：货盘切换 + 本盘货物清单 */
 defineProps<{ showCog?: boolean }>()
@@ -18,14 +17,14 @@ function exportPallet() {
 }
 
 const skuRows = computed(() => {
-  const m = new Map<string, { sku: string; l: number; w: number; h: number; n: number; wmin: number; wmax: number; kind: CargoKind; name: string; fragile: boolean }>()
+  const m = new Map<string, { sku: string; l: number; w: number; h: number; n: number; wmin: number; wmax: number }>()
   for (const c of cargos.value) {
     const r = m.get(c.sku)
     if (r) {
       r.n++
       r.wmin = Math.min(r.wmin, c.weight)
       r.wmax = Math.max(r.wmax, c.weight)
-    } else m.set(c.sku, { sku: c.sku, l: c.length, w: c.width, h: c.height, n: 1, wmin: c.weight, wmax: c.weight, kind: c.kind ?? 'carton', name: c.name ?? '', fragile: !!c.fragile })
+    } else m.set(c.sku, { sku: c.sku, l: c.length, w: c.width, h: c.height, n: 1, wmin: c.weight, wmax: c.weight })
   }
   return [...m.values()].sort((a, b) => b.n - a.n)
 })
@@ -70,7 +69,6 @@ const remaining = computed(() => result.value?.layout.remaining ?? [])
         <div v-for="r in skuRows" :key="r.sku" class="sku">
           <i class="sw" :style="{ background: skuColors.get(r.sku) }" />
           <div class="sk-m">
-            <div class="sk-n"><b>{{ r.name || KIND_NAME[r.kind] }}</b><em :class="r.kind">{{ r.kind === 'case' ? '特种箱' : KIND_NAME[r.kind] }}</em><em v-if="r.fragile" class="frag">怕压</em></div>
             <div class="sk-d num">{{ r.l }} × {{ r.w }} × {{ r.h }}</div>
             <div class="sk-bar"><span :style="{ width: (r.n / maxN) * 100 + '%', background: skuColors.get(r.sku) }" /></div>
           </div>
@@ -211,44 +209,9 @@ const remaining = computed(() => result.value?.layout.remaining ?? [])
   flex: 1;
   min-width: 0;
 }
-.sk-n {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  min-width: 0;
-}
-.sk-n b {
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.sk-n em {
-  flex: none;
-  font-style: normal;
-  font-size: 10.5px;
-  padding: 0 6px;
-  border-radius: 5px;
-  color: #e9d3b4;
-  background: rgba(216, 180, 138, 0.16);
-}
-.sk-n em.wood {
-  color: #e2b07c;
-  background: rgba(185, 130, 77, 0.22);
-}
-.sk-n em.case {
-  color: #b7c99a;
-  background: rgba(111, 130, 86, 0.28);
-}
-.sk-n em.frag {
-  color: #ffc24b;
-  background: rgba(255, 194, 75, 0.14);
-}
 .sk-d {
-  font-size: 11.5px;
-  color: var(--text-3);
-  margin-top: 1px;
+  font-size: 12.5px;
+  font-weight: 550;
 }
 .sk-bar {
   height: 3px;

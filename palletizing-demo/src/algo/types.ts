@@ -2,16 +2,11 @@
  * 单盘动态码放规划 —— 领域数据模型
  *
  * 坐标约定（算法内部）：
- *   - 垛形局部坐标系：原点在货盘可用区域（默认 1200×1200）的左前角（货盘上表面），
+ *   - 垛形局部坐标系：原点在 1000×1000 垛形区域的左前角（货盘上表面），
  *     X 向右、Y 向远离操作者（操作者站在 Y=0 一侧）、Z 向上，单位 mm。
  *   - 垛形区域居中放置在货盘上，因此货盘几何中心 = (footprintX/2, footprintY/2)。
  *   - 货物位置 (x,y,z) 取旋转后的最小角点。
  */
-
-/** 包装类型：纸箱 / 木箱 / 军用特种箱（滚塑或金属箱体） */
-export type CargoKind = 'carton' | 'wood' | 'case'
-
-export const KIND_NAME: Record<CargoKind, string> = { carton: '纸箱', wood: '木箱', case: '军用特种箱' }
 
 export interface Cargo {
   id: string
@@ -24,14 +19,6 @@ export interface Cargo {
   height: number
   /** kg，重心默认在几何中心 */
   weight: number
-  /** 包装类型（缺省按纸箱） */
-  kind?: CargoKind
-  /** 品名（仅用于展示与指引） */
-  name?: string
-  /** 承压上限 kg：顶面允许承受的最大压重（缺省 = 不限） */
-  maxLoad?: number
-  /** 易碎 / 怕压：上面不压其他货物 */
-  fragile?: boolean
 }
 
 export interface PalletSpec {
@@ -45,10 +32,10 @@ export interface PalletSpec {
 export type OffsetBase = 'pallet' | 'footprint'
 
 export interface Constraints {
-  /** 货盘可用区域（长宽方向）：本项目 1200×1200；技术要求图 2-1 口径为 1000×1000 */
+  /** 垛形外边界（长宽方向），技术要求：≤1000×1000 */
   footprintX: number
   footprintY: number
-  /** 垛高上限（仅货物，不含货盘）：本项目 1500 */
+  /** 垛高上限（仅货物，不含货盘），技术要求：1000–1200 */
   maxStackHeight: number
   /** 垛高下限（软约束，货量不足时仅提示） */
   minStackHeight: number
@@ -56,9 +43,9 @@ export interface Constraints {
   cogHeightRatioMax: number
   /** 水平重心偏离 ≤ ratio × 基准长度，技术要求 ±10% */
   cogOffsetRatioMax: number
-  /** 偏移基准：货盘边长还是可用区域边长（待甲方确认，默认货盘） */
+  /** 偏移基准：货盘尺寸 1219 还是垛形 1000（待甲方确认，默认货盘） */
   cogOffsetBase: OffsetBase
-  /** 层利用率下限（相对货盘可用区域，逐层计算） */
+  /** 层利用率下限（相对 1000×1000，与技术要求图 2-1 的口径一致） */
   utilizationMin: number
   /** 上层外轮廓超出下层外轮廓的最大比例，技术要求 5% */
   overhangRatioMax: number
@@ -72,11 +59,9 @@ export interface Constraints {
   heavyBottom?: boolean
   /** 大件置底：单件体积大的层优先放在下面（缺省视为开启） */
   bigBottom?: boolean
-  /** 承压约束：每件货物上方的压重不超过它的承压上限（缺省视为开启） */
-  bearing?: boolean
 }
 
-export type SequenceStrategy = 'balance' | 'layer-row' | 'dblf'
+export type SequenceStrategy = 'balance' | 'layer-row'
 
 export interface SequenceParams {
   /** 允许提前开始上层的层数：0 = 严格逐层；1 = 下层局部完成后可先码上层 */
@@ -114,9 +99,6 @@ export interface Placement {
   /** 所属层（从 0 开始） */
   layer: number
   weight: number
-  kind?: CargoKind
-  /** 承压上限 kg（缺省 = 不限） */
-  maxLoad?: number
 }
 
 export type LayerKind = 'pattern' | 'mixed' | 'cap' | 'free'
@@ -162,16 +144,12 @@ export interface StepSeries {
 }
 
 export interface SequenceSummary {
-  /** 过程峰值偏心：不计起步阶段（盘上货物不足整盘货重的 10% 时，重心对单件位置极敏感而偏载力矩很小） */
   peakRatio: number
-  /** 起步阶段的步数，以及这几步里的最大偏心 */
-  warmupSteps: number
-  warmupPeak: number
   meanRatio: number
   /** 峰值出现的步号 */
   peakStep: number
   peakMoment: number
-  /** 超出容差的步数（不计起步阶段） */
+  /** 超出容差的步数（不计入前 warmupSteps 步） */
   exceedSteps: number
   holes: number
   travel: number
@@ -218,25 +196,9 @@ export interface LayoutMetrics {
   interlockRatio: number
   /** 垛高一半以下的货物重量占比（大件、重件置底的效果） */
   lowerHalfMassRatio: number
-  /** 每件货物顶面承受的压重 kg（与 placements 下标一一对应） */
-  loads: number[]
-  /** 最大承压比（压重 / 承压上限）与超限件数 */
-  maxLoadRatio: number
-  overloaded: number
-  /** 空间利用率：货物体积 / (可用区域 × 垛高) */
-  volumeUtilization: number
   collisions: number
   outOfBounds: number
   items: MetricItem[]
-}
-
-/** 对照算法给出的完整方案（位置 + 顺序），用同一个评估器核算 */
-export interface BaselinePlan {
-  layout: LayoutResult
-  supporters: number[][]
-  sequence: SequenceResult
-  metrics: LayoutMetrics
-  elapsedMs: number
 }
 
 export interface PlanResult {
@@ -245,8 +207,6 @@ export interface PlanResult {
   supporters: number[][]
   sequences: { balance: SequenceResult; baseline: SequenceResult }
   metrics: LayoutMetrics
-  /** 对照算法 DBLF（经典三维装箱算法）在同一批货物上的结果 */
-  dblf: BaselinePlan
   timings: { layoutMs: number; sequenceMs: number; totalMs: number }
 }
 

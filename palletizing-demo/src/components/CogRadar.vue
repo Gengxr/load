@@ -12,8 +12,6 @@ const props = defineProps<{
   tolRatio: number
   color: string
   size?: number
-  /** 起步阶段的步数：这几步超出容差区不标红 */
-  warmup?: number
   /** 与另一条轨迹共用的显示范围（对比模式左右一致） */
   range?: number
 }>()
@@ -41,7 +39,7 @@ const pts = computed(() => {
 const cur = computed(() => ({
   x: clampv(props.steps.cogX[kk.value] - props.fx / 2),
   y: clampv(-(props.steps.cogY[kk.value] - props.fy / 2)),
-  bad: props.steps.ratio[kk.value] > props.tolRatio + 1e-9 && kk.value > (props.warmup ?? 0),
+  bad: props.steps.ratio[kk.value] > props.tolRatio + 1e-9,
 }))
 const rings = computed(() => [0.33, 0.66, 1].map((f) => f * R.value * 0.94))
 </script>

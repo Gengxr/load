@@ -1,9 +1,8 @@
 /**
  * 三维码放场景（Three.js）
  *
- * 场景：重心重量测量台（三点称重）→ 航空货盘 1219×1219×75 → 货盘可用空间 1200×1200×1500
- *       左侧辊道输送线按出库顺序送来散货；货物逐件"抓取—抬升—平移—竖直下放"，
- *       可由人工按指引完成，也可切换为码垛机械臂执行（同一份方案、同一个顺序）。
+ * 场景：重心重量测量台（三点称重）→ 航空货盘 1219×1219×75 → 垛形边界 1000×1000×H
+ *       左侧辊道输送线按出库顺序送来散货；货物逐件"抓取—抬升—平移—竖直下放"。
  * 重心：系统重心球 + 铅垂线 + 货盘面上的容差区（±10%）与重心轨迹（透视显示）。
  *
  * 坐标：算法 mm（X 右、Y 远离操作者、Z 上）→ 世界 m（X 右、Y 上、Z 朝向操作者）。
@@ -15,10 +14,9 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { Line2 } from 'three/addons/lines/Line2.js'
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js'
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js'
-import type { CargoKind, PalletSpec, Placement, StepSeries } from '../algo/types'
-import { cartonTexture, caseTexture, floorTexture, glowTexture, numberTexture, palletTexture, woodTexture } from './textures'
-import { ACCENT, BAD, COG, OK, heatColor } from './palette'
-import { RobotArm, type RobotState } from './RobotArm'
+import type { PalletSpec, Placement, StepSeries } from '../algo/types'
+import { cartonTexture, floorTexture, glowTexture, numberTexture, palletTexture } from './textures'
+import { ACCENT, BAD, COG, OK } from './palette'
 
 const MM = 0.001
 const PLATFORM_H = 0.12
@@ -40,12 +38,6 @@ export interface ViewerPlan {
   /** 容差区半边长 mm（= 偏移限值 × 基准长度） */
   tolHalf: number
   tolRatio: number
-  /** 每件的包装类型（决定箱体外观） */
-  kinds?: (CargoKind | undefined)[]
-  /** 每件的承压比（压重 / 承压上限），用于承压热力图 */
-  heat?: number[]
-  /** 起步阶段的步数：这几步里重心超出容差区只作提示，不算超限 */
-  warmup?: number
 }
 
 export interface ViewerOptions {
@@ -57,7 +49,7 @@ export interface ViewerOptions {
   previewNext: boolean
 }
 
-export type CameraPreset = 'iso' | 'top' | 'front' | 'side' | 'operator' | 'robot'
+export type CameraPreset = 'iso' | 'top' | 'front' | 'side' | 'operator'
 
 interface Tween {
   start: number
@@ -91,10 +83,7 @@ export class PalletViewer {
   private geoCache = new Map<string, THREE.BufferGeometry>()
   private edgeCache = new Map<string, THREE.BufferGeometry>()
   private matCache = new Map<string, THREE.MeshStandardMaterial>()
-  private skins: Record<CargoKind, THREE.Texture> = { carton: cartonTexture(), wood: woodTexture(), case: caseTexture() }
-  private heatOn = false
-  private robot: RobotArm | null = null
-  private robotOn = false
+  private cardboard = cartonTexture()
   private edgeMat = new THREE.LineBasicMaterial({ color: 0x0f141c, transparent: true, opacity: 0.32 })
   private labelTex = new Map<number, THREE.Texture>()
   private showLabels = false
@@ -130,7 +119,6 @@ export class PalletViewer {
 
   onHover: (index: number | null, x: number, y: number) => void = () => {}
   onStep: (k: number) => void = () => {}
-  onRobot: (s: RobotState) => void = () => {}
 
   constructor(container: HTMLElement, opts: Partial<ViewerOptions> = {}) {
     this.container = container
@@ -448,7 +436,8 @@ export class PalletViewer {
         this.geoCache.set(key, geo)
         this.edgeCache.set(key, new THREE.EdgesGeometry(new THREE.BoxGeometry(p.dx * MM, p.dz * MM, p.dy * MM)))
       }
-      const mesh = new THREE.Mesh(geo, this.baseMat(i))
+      const mat = this.material(plan.colors[i])
+      const mesh = new THREE.Mesh(geo, mat)
       mesh.castShadow = mesh.receiveShadow = true
       mesh.userData.index = i
       const edges = new THREE.LineSegments(this.edgeCache.get(key)!, this.edgeMat)
@@ -465,48 +454,13 @@ export class PalletViewer {
     this.gotoStep(0)
   }
 
-  private material(color: string, kind: CargoKind = 'carton'): THREE.MeshStandardMaterial {
-    const key = kind + '|' + color
-    let m = this.matCache.get(key)
+  private material(color: string): THREE.MeshStandardMaterial {
+    let m = this.matCache.get(color)
     if (!m) {
-      m = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(color),
-        roughness: kind === 'case' ? 0.58 : kind === 'wood' ? 0.78 : 0.82,
-        metalness: kind === 'case' ? 0.12 : 0,
-        map: this.skins[kind],
-      })
-      this.matCache.set(key, m)
+      m = new THREE.MeshStandardMaterial({ color: new THREE.Color(color), roughness: 0.82, metalness: 0.0, map: this.cardboard })
+      this.matCache.set(color, m)
     }
     return m
-  }
-
-  /** 第 i 件的常态材质：承压热力图开启时按承压比着色，否则按包装类型与规格着色 */
-  private baseMat(i: number): THREE.MeshStandardMaterial {
-    const p = this.plan!
-    if (this.heatOn && p.heat) {
-      const key = 'heat|' + heatColor(Math.round(Math.min(1.05, p.heat[i] ?? 0) * 20) / 20)
-      let m = this.matCache.get(key)
-      if (!m) {
-        m = new THREE.MeshStandardMaterial({ color: new THREE.Color(key.slice(5)), roughness: 0.7, metalness: 0 })
-        this.matCache.set(key, m)
-      }
-      return m
-    }
-    return this.material(p.colors[i], p.kinds?.[i] ?? 'carton')
-  }
-
-  /** 承压热力图：按"压重 / 承压上限"给每件货物着色 */
-  setHeat(on: boolean) {
-    this.heatOn = on
-    if (!this.plan) return
-    const shared = new Set<THREE.Material>(this.matCache.values())
-    this.boxes.forEach((m, i) => {
-      // 高亮时用的是克隆出来的材质，换回常态材质前先释放
-      if (!shared.has(m.material as THREE.Material)) (m.material as THREE.Material).dispose()
-      m.material = this.baseMat(i)
-    })
-    this.applyHighlight()
-    this.dirty = true
   }
 
   get currentStep() {
@@ -539,32 +493,8 @@ export class PalletViewer {
     this.setCog(k, 0)
     this.applyHighlight()
     this.previewGhost()
-    this.robotHome()
     this.dirty = true
     this.onStep(k)
-  }
-
-  // ───────────────────────── 机械臂 ─────────────────────────
-
-  /** 显示 / 隐藏码垛机械臂；显示时每一件都由机械臂取放 */
-  setRobot(on: boolean) {
-    this.robotOn = on
-    if (on && !this.robot) {
-      const floorY = -0.075 - PLATFORM_H
-      this.robot = new RobotArm(new THREE.Vector3(-0.8, floorY, -1.42), 0.86, this.opts.accent)
-      this.stageGroup.add(this.robot.group)
-    }
-    if (this.robot) this.robot.group.visible = on
-    this.robotHome()
-    this.dirty = true
-  }
-
-  /** 待命位：取料点正上方 */
-  private robotHome() {
-    if (!this.robot || !this.robotOn || this.animating) return
-    this.robot.setGrip(false)
-    this.robot.setTcp(new THREE.Vector3(CONV_END_X - 0.3, CONV_Y + 0.72, 0), 0)
-    this.onRobot(this.robot.state)
   }
 
   /** 暂停状态：在下一件的目标位置显示呼吸虚影 */
@@ -643,32 +573,11 @@ export class PalletViewer {
     this.ghost.scale.set(pl.dx * MM * 1.002, pl.dz * MM * 1.002, pl.dy * MM * 1.002)
     const supporters = p.supporters[idx]
     const tmp = new THREE.Vector3()
-    // 机械臂：先从上一件的放置点回到取料点（货物不动），再执行取—抬—移—放
-    const robot = this.robotOn ? this.robot : null
-    const REACH = robot ? 0.2 : 0
-    const from = robot ? robot.tcp.clone() : null
-    const pickTop = new THREE.Vector3(start.x, start.y + (pl.dz * MM) / 2, start.z)
-    const hop = from ? Math.max(from.y, pickTop.y) + 0.25 : 0
-    if (robot) {
-      robot.setTool(Math.max(pl.dx, pl.dy) * MM, Math.min(pl.dx, pl.dy) * MM)
-      robot.setGrip(false)
-    }
     return new Promise((resolve) => {
       this.tweens.push({
         start: performance.now(),
-        dur: robot ? durationMs * 1.3 : durationMs,
-        update: (T) => {
-          if (robot && from && T < REACH) {
-            // 回程：抬起 → 平移 → 对准货物顶面落下
-            const e = easeInOut(T / REACH)
-            const y = e < 0.5 ? THREE.MathUtils.lerp(from.y, hop, easeOut(e * 2)) : THREE.MathUtils.lerp(hop, pickTop.y, easeInOut((e - 0.5) * 2))
-            tmp.set(THREE.MathUtils.lerp(from.x, pickTop.x, e), y, THREE.MathUtils.lerp(from.z, pickTop.z, e))
-            robot.setTcp(tmp, startYaw * e)
-            this.onRobot(robot.state)
-            this.setCog(k, 0)
-            return
-          }
-          const t = robot ? (T - REACH) / (1 - REACH) : T
+        dur: durationMs,
+        update: (t) => {
           const a = clamp01(t / 0.2)
           const b = clamp01((t - 0.2) / 0.42)
           const c = clamp01((t - 0.62) / 0.38)
@@ -682,12 +591,6 @@ export class PalletViewer {
           }
           m.position.copy(tmp)
           m.rotation.y = THREE.MathUtils.lerp(startYaw, 0, easeInOut(b))
-          if (robot) {
-            if (!robot.state.gripping) robot.setGrip(true)
-            tmp.y += (pl.dz * MM) / 2
-            robot.setTcp(tmp, m.rotation.y)
-            this.onRobot(robot.state)
-          }
           ;(this.ghostEdges.material as THREE.LineBasicMaterial).opacity = 0.35 + 0.55 * (0.5 + 0.5 * Math.sin(t * Math.PI * 6))
           this.layoutQueue(k + 1, clamp01(t / 0.6))
           // 支撑件高亮
@@ -699,11 +602,6 @@ export class PalletViewer {
           for (const s of supporters) this.setEmissive(s, 0)
           m.position.copy(target)
           m.rotation.set(0, 0, 0)
-          if (robot) {
-            robot.setGrip(false)
-            robot.setTcp(new THREE.Vector3(target.x, target.y + (pl.dz * MM) / 2, target.z), 0)
-            this.onRobot(robot.state)
-          }
           this.ghost.visible = false
           this.animating = false
           this.animBox = -1
@@ -749,16 +647,15 @@ export class PalletViewer {
   private setEmissive(i: number, v: number, color = this.opts.accent) {
     const m = this.boxes[i]
     if (!m) return
-    const base = this.baseMat(i)
     if (v <= 0) {
-      if (m.material !== base) {
+      if (m.material !== this.material(this.plan!.colors[i])) {
         ;(m.material as THREE.Material).dispose()
-        m.material = base
+        m.material = this.material(this.plan!.colors[i])
       }
       return
     }
     let mat = m.material as THREE.MeshStandardMaterial
-    if (mat === base) {
+    if (mat === this.material(this.plan!.colors[i])) {
       mat = mat.clone()
       m.material = mat
     }
@@ -792,11 +689,8 @@ export class PalletViewer {
     this.plumb.geometry.computeBoundingSphere()
     this.tolFill.position.set(0, 0.002, 0)
     this.tolLine.position.set(0, 0.0025, 0)
-    const over = ratio > p.tolRatio + 1e-9
-    // 起步阶段（盘上货物还很少）超出容差区：用琥珀色提示，不算超限
-    const warm = over && k < (p.warmup ?? 0)
-    const bad = over && !warm
-    const zoneColor = new THREE.Color(bad ? BAD : warm ? COG : OK)
+    const bad = ratio > p.tolRatio + 1e-9
+    const zoneColor = new THREE.Color(bad ? BAD : OK)
     ;(this.tolFill.material as THREE.MeshBasicMaterial).color.copy(zoneColor)
     ;(this.tolFill.material as THREE.MeshBasicMaterial).opacity = bad ? 0.2 : 0.13
     ;(this.tolLine.material as THREE.LineBasicMaterial).color.copy(zoneColor)
@@ -889,21 +783,12 @@ export class PalletViewer {
 
   setCameraPreset(name: CameraPreset, animate = true) {
     const c = this.opts.compact
-    // 垛高上限越高，相机越远、注视点越高（以 1.2 m 为基准）
-    const H = (this.plan?.maxHeight ?? 1500) * MM
-    // 对比视图的视窗又宽又矮，需要退得更远才能装下整垛
-    const k = 1 + Math.max(0, H - 1.2) * (c ? 1.25 : 0.42)
-    const ty = Math.max(0, H - 1.2) * (c ? 0.62 : 0.36)
     const presets: Record<CameraPreset, [THREE.Vector3, THREE.Vector3]> = {
-      iso: [
-        (c ? new THREE.Vector3(1.78, 1.62, 2.12) : new THREE.Vector3(2.55, 2.3, 3.3)).multiplyScalar(k),
-        new THREE.Vector3(c ? 0 : -0.34, (c ? 0.36 : 0.44) + ty, 0),
-      ],
-      top: [new THREE.Vector3(0.0001, (c ? 3.3 : 3.9) * k, 0.0001), new THREE.Vector3(0, 0, 0)],
-      front: [new THREE.Vector3(0, 0.75 + ty, (c ? 3.0 : 3.5) * k), new THREE.Vector3(0, 0.5 + ty, 0)],
-      side: [new THREE.Vector3((c ? 3.0 : 3.5) * k, 0.75 + ty, 0), new THREE.Vector3(0, 0.5 + ty, 0)],
-      operator: [new THREE.Vector3(0.28, 1.95 + ty * 1.6, 2.3 * k), new THREE.Vector3(0, 0.3 + ty, -0.05)],
-      robot: [new THREE.Vector3(3.35, 2.75, 4.05), new THREE.Vector3(-0.42, 0.98, -0.42)],
+      iso: [c ? new THREE.Vector3(1.78, 1.62, 2.12) : new THREE.Vector3(2.55, 2.3, 3.3), new THREE.Vector3(c ? 0 : -0.34, c ? 0.36 : 0.44, 0)],
+      top: [new THREE.Vector3(0.0001, c ? 3.3 : 3.9, 0.0001), new THREE.Vector3(0, 0, 0)],
+      front: [new THREE.Vector3(0, 0.75, c ? 3.0 : 3.5), new THREE.Vector3(0, 0.5, 0)],
+      side: [new THREE.Vector3(c ? 3.0 : 3.5, 0.75, 0), new THREE.Vector3(0, 0.5, 0)],
+      operator: [new THREE.Vector3(0.28, 1.95, 2.3), new THREE.Vector3(0, 0.3, -0.05)],
     }
     const [pos, target] = presets[name]
     if (!animate) {
@@ -1064,7 +949,7 @@ export class PalletViewer {
       else mat?.dispose()
     })
     for (const t of this.labelTex.values()) t.dispose()
-    for (const t of Object.values(this.skins)) t.dispose()
+    this.cardboard.dispose()
     this.renderer.dispose()
     this.renderer.domElement.remove()
   }

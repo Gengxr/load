@@ -3,7 +3,6 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { cargoById, result, skuColors, state, totalSteps } from '../store'
 import { goto, next } from '../playback'
 import { pct } from '../format'
-import { KIND_NAME } from '../algo/types'
 import ViewerPanel from './ViewerPanel.vue'
 import LayerView from './LayerView.vue'
 import BoxGlyph from './BoxGlyph.vue'
@@ -107,8 +106,6 @@ function onKey(e: KeyboardEvent) {
 
 onMounted(() => {
   state.strategy = 'balance'
-  // 从"已码完"的状态进来时回到第一件，工人从头开始
-  if (state.step >= totalSteps.value) goto(0)
   window.addEventListener('keydown', onKey)
   timer = window.setInterval(() => (now.value = Date.now()), 500)
 })
@@ -144,11 +141,8 @@ const progress = computed(() => (totalSteps.value ? state.step / totalSteps.valu
       <div class="mid">
       <template v-if="cur">
         <div class="steprow">
-          <div>
-            <div class="stepno num">
-              第 <b>{{ state.step + 1 }}</b> <span>/ {{ totalSteps }} 件</span>
-            </div>
-            <div class="what"><span class="kind" :class="cur.p.kind ?? 'carton'">{{ KIND_NAME[cur.p.kind ?? 'carton'] }}</span>{{ cur.c?.name }}<em v-if="cur.c?.fragile">怕压，轻放</em></div>
+          <div class="stepno num">
+            第 <b>{{ state.step + 1 }}</b> <span>/ {{ totalSteps }} 件</span>
           </div>
           <BoxGlyph :dx="cur.p.dx" :dy="cur.p.dy" :dz="cur.p.dz" :color="skuColors.get(cur.p.sku) ?? '#ccc'" :size="72" />
         </div>
@@ -185,13 +179,13 @@ const progress = computed(() => (totalSteps.value ? state.step / totalSteps.valu
             :placed-set="placed"
             :highlight="cur.i"
             :show-lower="false"
-            :size="204"
+            :size="236"
           />
           <div class="where-t">
             <div class="chipline"><i :style="{ background: skuColors.get(cur.p.sku) }" />{{ cur.c?.id }}</div>
             <div>俯视图白框为本件位置（下方为操作侧）</div>
             <div>{{ cur.sup ? `压在 ${cur.sup} 件货物上，放稳后确认` : '直接放在货盘上，对齐边线' }}</div>
-            <div class="bal num">放下后重心偏心 <b :class="ratio > state.cons.cogOffsetRatioMax && state.step >= (seq?.summary.warmupSteps ?? 0) ? 'bad' : 'ok'">{{ pct(ratio) }}</b></div>
+            <div class="bal num">放下后重心偏心 <b :class="ratio > state.cons.cogOffsetRatioMax ? 'bad' : 'ok'">{{ pct(ratio) }}</b></div>
           </div>
         </div>
       </template>
@@ -298,43 +292,18 @@ const progress = computed(() => (totalSteps.value ? state.step / totalSteps.valu
   color: var(--text-2);
 }
 .stepno b {
-  font-size: 48px;
+  font-size: 56px;
   color: var(--text);
   line-height: 1;
 }
 .stepno span {
   font-size: 20px;
 }
-.what {
-  margin-top: 6px;
-  font-size: 13.5px;
-  color: var(--text-2);
-}
-.what .kind {
-  display: inline-block;
-  margin-right: 8px;
-  padding: 1px 9px;
-  border-radius: 6px;
-  font-weight: 600;
-  color: #1a1206;
-  background: #d8b48a;
-}
-.what .kind.wood {
-  background: #c08a55;
-}
-.what .kind.case {
-  background: #8fa372;
-}
-.what em {
-  font-style: normal;
-  margin-left: 8px;
-  color: var(--warn);
-}
 .rfid {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  padding: 8px 14px;
+  padding: 12px 14px;
   border-radius: 12px;
   background: rgba(34, 211, 238, 0.08);
   border: 1px solid rgba(34, 211, 238, 0.3);
@@ -345,7 +314,7 @@ const progress = computed(() => (totalSteps.value ? state.step / totalSteps.valu
 }
 .rfid b {
   font-family: var(--mono);
-  font-size: 34px;
+  font-size: 40px;
   letter-spacing: 0.08em;
   color: var(--accent);
 }

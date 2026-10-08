@@ -88,9 +88,6 @@ import {
   Container,
   PanelRightOpen,
   Move,
-  Bot,
-  Hand,
-  Flame,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
 
@@ -185,9 +182,6 @@ const MAP: Record<string, Component> = {
   container: Container,
   panelRight: PanelRightOpen,
   move: Move,
-  robot: Bot,
-  hand: Hand,
-  heat: Flame,
 }
 </script>
 

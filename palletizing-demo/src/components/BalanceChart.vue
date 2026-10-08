@@ -10,10 +10,6 @@ const props = defineProps<{
   height?: number
   /** 层边界（步号） */
   marks?: number[]
-  /** 对照曲线的名称 */
-  baseLabel?: string
-  /** 起步阶段的步数：这一段不计入过程峰值，用底色标出 */
-  warmup?: number
 }>()
 const emit = defineEmits<{ seek: [k: number] }>()
 
@@ -78,11 +74,6 @@ const show = computed(() => hover.value ?? cursor.value)
           <text :x="pad.l - 6" :y="y(t) + 3.5" text-anchor="end">{{ (t * 100).toFixed(0) }}%</text>
         </template>
       </g>
-      <g v-if="warmup" class="warm">
-        <title>起步阶段：盘上货物还不到整盘的 20%，重心对单件位置很敏感而偏载力矩很小，不计入过程峰值</title>
-        <rect :x="pad.l" :y="pad.t" :width="Math.max(0, x(warmup) - pad.l)" :height="H - pad.t - pad.b" />
-        <text v-if="x(warmup) - pad.l > 26" :x="pad.l + 4" :y="pad.t + 10">起步</text>
-      </g>
       <g v-if="marks" class="marks">
         <line v-for="m in marks" :key="m" :x1="x(m)" :x2="x(m)" :y1="pad.t" :y2="H - pad.b" />
       </g>
@@ -100,7 +91,7 @@ const show = computed(() => hover.value ?? cursor.value)
     <div class="tip num">
       第 {{ show }} 件
       <span class="o">本方案 {{ ((ours[show] ?? 0) * 100).toFixed(1) }}%</span>
-      <span v-if="base" class="b">{{ baseLabel ?? '对照' }} {{ ((base[show] ?? 0) * 100).toFixed(1) }}%</span>
+      <span v-if="base" class="b">基线 {{ ((base[show] ?? 0) * 100).toFixed(1) }}%</span>
     </div>
   </div>
 </template>
@@ -114,13 +105,6 @@ const show = computed(() => hover.value ?? cursor.value)
 svg {
   display: block;
   cursor: crosshair;
-}
-.warm rect {
-  fill: rgba(251, 191, 36, 0.09);
-}
-.warm text {
-  fill: rgba(251, 191, 36, 0.75);
-  font-size: 9.5px;
 }
 .grid line {
   stroke: rgba(148, 163, 184, 0.09);

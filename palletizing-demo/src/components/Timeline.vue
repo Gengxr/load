@@ -4,7 +4,7 @@ import { currentSeq, result, state, totalSteps } from '../store'
 import { goto, next, stepBack, toggle } from '../playback'
 import Icon from './Icon.vue'
 
-const props = withDefaults(defineProps<{ showStrategy?: boolean; series?: 'current' | 'both'; /** 第二条曲线（对照）；缺省取另一种顺序 */ baseRatio?: number[] }>(), { showStrategy: true, series: 'current' })
+const props = withDefaults(defineProps<{ showStrategy?: boolean; series?: 'current' | 'both' }>(), { showStrategy: true, series: 'current' })
 
 const bar = ref<HTMLDivElement | null>(null)
 const root = ref<HTMLDivElement | null>(null)
@@ -27,7 +27,7 @@ onBeforeUnmount(() => {
 
 function onKey(e: KeyboardEvent) {
   const tag = (e.target as HTMLElement)?.tagName
-  if (state.mode === 'station' || state.mode === 'robot' || state.explainOpen || tag === 'INPUT' || tag === 'SELECT') return
+  if (state.mode === 'station' || state.explainOpen || tag === 'INPUT' || tag === 'SELECT') return
   if (e.code === 'Space') {
     e.preventDefault()
     toggle()
@@ -44,8 +44,7 @@ const spark = computed(() => {
   if (!s) return { d: '', base: '', area: '', tolY: -10 }
   const r = result.value!
   const other = s.strategy === 'balance' ? r.sequences.baseline : r.sequences.balance
-  const otherRatio = props.baseRatio ?? other.steps.ratio
-  const ymax = Math.max(0.12, ...s.steps.ratio, ...(props.series === 'both' ? otherRatio : []))
+  const ymax = Math.max(0.12, ...s.steps.ratio, ...(props.series === 'both' ? other.steps.ratio : []))
   const y = (v: number) => H - 3 - (v / ymax) * (H - 8)
   const mk = (arr: number[]) => {
     let d = ''
@@ -54,7 +53,7 @@ const spark = computed(() => {
     return d
   }
   const d = mk(s.steps.ratio)
-  return { d, area: d + `L${W.value},${H}L0,${H}Z`, base: props.series === 'both' ? mk(otherRatio) : '', tolY: y(state.cons.cogOffsetRatioMax) }
+  return { d, area: d + `L${W.value},${H}L0,${H}Z`, base: props.series === 'both' ? mk(other.steps.ratio) : '', tolY: y(state.cons.cogOffsetRatioMax) }
 })
 const layerMarks = computed(() => {
   const s = currentSeq.value
@@ -126,7 +125,7 @@ const speeds = [0.5, 1, 2, 4, 8]
 
     <div v-if="showStrategy" class="strat">
       <button :class="{ on: state.strategy === 'balance' }" @click="state.strategy = 'balance'"><i class="o" />本方案</button>
-      <button :class="{ on: state.strategy === 'layer-row' }" title="对照基线：一层码满再码下一层，每层由远到近、从左到右" @click="state.strategy = 'layer-row'"><i class="b" />逐层行扫描</button>
+      <button :class="{ on: state.strategy === 'layer-row' }" @click="state.strategy = 'layer-row'"><i class="b" />传统逐层</button>
     </div>
 
     <div class="speed seg">

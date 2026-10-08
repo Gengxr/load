@@ -25,7 +25,7 @@ describe('舱内装载 · 重心计算', () => {
   })
 
   it('超过货位或舱限重时给出违规项', () => {
-    const m = evaluateStatic(M6, [unit(1, 800)], [{ palletId: 'P01', slotId: 'A1', yaw: 0 }])
+    const m = evaluateStatic(M6, [unit(1, 700)], [{ palletId: 'P01', slotId: 'A1', yaw: 0 }])
     expect(m.pass).toBe(false)
     expect(m.violations.some((v) => v.code === 'SLOT_OVERWEIGHT')).toBe(true)
   })

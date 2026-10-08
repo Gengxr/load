@@ -1,17 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
 import { current, generateOrder, replanPallet, runPipeline, state } from '../store'
-import { ENVELOPES, type EnvelopeKey } from '../algo/defaults'
 import Icon from './Icon.vue'
-
-/** 货盘可用空间的口径：本项目 1.2×1.2×1.5 m，或技术要求表 2-2 / 图 2-1 的 1.0×1.0×1.2 m */
-const envKey = computed<EnvelopeKey>(() => (state.cons.footprintX === ENVELOPES.spec.footprintX && state.cons.maxStackHeight === ENVELOPES.spec.maxStackHeight ? 'spec' : 'project'))
-function setEnvelope(k: EnvelopeKey) {
-  Object.assign(state.cons, ENVELOPES[k])
-  state.gen.fx = ENVELOPES[k].footprintX
-  state.gen.fy = ENVELOPES[k].footprintY
-  state.gen.targetHeight = k === 'project' ? 1350 : 1100
-}
 
 const leadOptions = [
   { v: 0, n: '严格逐层' },
@@ -48,7 +37,7 @@ async function apply(all: boolean) {
           <input v-model.number="state.gen.skuCount" type="number" min="1" max="11" />
         </div>
         <div class="row col">
-          <label>单盘目标体积<b class="num">{{ ((state.gen.fillRatio * state.gen.fx * state.gen.fy * state.gen.targetHeight) / 1e9).toFixed(2) }} m³</b></label>
+          <label>单盘目标体积<b class="num">{{ ((state.gen.fillRatio * state.gen.targetHeight) / 1000).toFixed(2) }} m³</b></label>
           <input v-model.number="state.gen.fillRatio" type="range" min="0.5" max="0.95" step="0.01" />
         </div>
         <div v-if="state.gen.mode === 'random'" class="row">
@@ -95,7 +84,6 @@ async function apply(all: boolean) {
         <h4><Icon name="layers" :size="14" />码放布局</h4>
         <label class="check"><input v-model="state.cons.heavyBottom" type="checkbox" />重件置底：重的层优先放在下面</label>
         <label class="check"><input v-model="state.cons.bigBottom" type="checkbox" />大件置底：单件体积大的层优先放在下面</label>
-        <label class="check"><input v-model="state.cons.bearing" type="checkbox" />承压约束：货物上方的压重不超过它的承压上限</label>
       </section>
 
       <section>
@@ -123,25 +111,19 @@ async function apply(all: boolean) {
       </section>
 
       <section>
-        <h4><Icon name="ruler" :size="14" />约束条件<em>表 2-2 与项目要求</em></h4>
-        <div class="row col">
-          <label>货盘可用空间</label>
-          <div class="seg full">
-            <button :class="{ on: envKey === 'project' }" title="本项目：单码盘可用空间 1.2 m × 1.2 m × 1.5 m" @click="setEnvelope('project')">1.2×1.2×1.5 m</button>
-            <button :class="{ on: envKey === 'spec' }" title="技术要求表 2-2 / 图 2-1 的口径：垛形 1000×1000×(1000–1200)" @click="setEnvelope('spec')">1.0×1.0×1.2 m</button>
-          </div>
-        </div>
+        <h4><Icon name="ruler" :size="14" />约束条件<em>技术要求表 2-2</em></h4>
         <div class="kv"><span>货盘</span><b class="num">{{ state.pallet.length }}×{{ state.pallet.width }}×{{ state.pallet.height }}</b></div>
-        <div class="kv"><span>垛高</span><b class="num">{{ state.cons.minStackHeight ? state.cons.minStackHeight + '–' : '≤ ' }}{{ state.cons.maxStackHeight }} mm</b></div>
+        <div class="kv"><span>垛形外边界</span><b class="num">{{ state.cons.footprintX }}×{{ state.cons.footprintY }}</b></div>
+        <div class="kv"><span>垛高</span><b class="num">{{ state.cons.minStackHeight }}–{{ state.cons.maxStackHeight }} mm</b></div>
         <div class="kv"><span>重心高度</span><b class="num">≤ {{ (state.cons.cogHeightRatioMax * 100).toFixed(0) }}% 总高</b></div>
         <div class="kv"><span>重心偏移</span><b class="num">≤ ±{{ (state.cons.cogOffsetRatioMax * 100).toFixed(0) }}%</b></div>
-        <div class="kv"><span>层利用率</span><b class="num">≥ {{ (state.cons.utilizationMin * 100).toFixed(0) }}%（逐层）</b></div>
+        <div class="kv"><span>层利用率</span><b class="num">≥ {{ (state.cons.utilizationMin * 100).toFixed(0) }}%（图 2-1 口径）</b></div>
         <div class="kv"><span>上层外扩</span><b class="num">≤ {{ (state.cons.overhangRatioMax * 100).toFixed(0) }}%</b></div>
         <div class="row gap">
           <label>偏移基准</label>
           <div class="seg">
-            <button :class="{ on: state.cons.cogOffsetBase === 'pallet' }" @click="state.cons.cogOffsetBase = 'pallet'">货盘 {{ state.pallet.length }}</button>
-            <button :class="{ on: state.cons.cogOffsetBase === 'footprint' }" @click="state.cons.cogOffsetBase = 'footprint'">可用区 {{ state.cons.footprintX }}</button>
+            <button :class="{ on: state.cons.cogOffsetBase === 'pallet' }" @click="state.cons.cogOffsetBase = 'pallet'">货盘 1219</button>
+            <button :class="{ on: state.cons.cogOffsetBase === 'footprint' }" @click="state.cons.cogOffsetBase = 'footprint'">垛形 1000</button>
           </div>
         </div>
         <div class="row col">

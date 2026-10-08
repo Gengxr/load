@@ -24,7 +24,7 @@ import {
   units,
   type DataTab,
 } from '../store'
-import { robotPayload, flattenImported, loadingPayload, orderPayload, palletUnitsPayload, palletizingPayload, parseCargoJson } from '../algo/io'
+import { flattenImported, loadingPayload, orderPayload, palletUnitsPayload, palletizingPayload, parseCargoJson } from '../algo/io'
 import { poolSize } from '../taskPool'
 import { download } from '../persist'
 import { pct } from '../format'
@@ -82,7 +82,7 @@ function exportHistory() {
 // ── 接口 ──
 interface Endpoint {
   id: string
-  sys: 'wms' | 'cabin' | 'robot'
+  sys: 'wms' | 'cabin'
   dir: 'in' | 'out'
   method: string
   path: string
@@ -117,25 +117,10 @@ const endpoints = computed<Endpoint[]>(() => [
       return { messageId: 'EV-0001', planId: 'LP-' + oid.value, version: 1, eventType: 'PALLET_IN_SLOT', palletId: op?.palletId, slotId: op?.slotId, occurredAt: new Date().toISOString() }
     },
   },
-  { id: 'r1', sys: 'robot', dir: 'out', method: 'POST', path: '{robot}/palletizing-jobs', name: '机械臂作业指令（逐件取放）', build: () => robotPayload(oid.value, pallets.value, state.cons) },
-  {
-    id: 'r2',
-    sys: 'robot',
-    dir: 'in',
-    method: 'POST',
-    path: '/ext/v1/robot/task-events',
-    name: '执行回报（放置完成 / 异常）',
-    build: () => {
-      const p = pallets.value[0]
-      const pl = p?.result.layout.placements[p.result.sequences.balance.order[0]]
-      return { messageId: 'RB-0001', palletId: p?.id, seq: 1, cargoId: pl?.cargoId, eventType: 'PLACED', measured: pl ? { x: pl.x + pl.dx / 2, y: pl.y + pl.dy / 2, z: pl.z + pl.dz } : null, occurredAt: new Date().toISOString() }
-    },
-  },
 ])
 const systems = [
   { k: 'wms' as const, n: '智能仓储子系统', d: '出库清单、散货数据、整托实测；接收码盘方案与出库顺序', icon: 'warehouse' },
   { k: 'cabin' as const, n: '航空货运模拟舱段子系统', d: '构型参数与约束；接收装载方案与装载 / 投放顺序', icon: 'plane' },
-  { k: 'robot' as const, n: '码垛机械臂控制器', d: '接收逐件取放指令（与设备无关）；回报执行结果', icon: 'robot' },
 ]
 const picked = ref('w2')
 const cur = computed(() => endpoints.value.find((e) => e.id === picked.value) ?? endpoints.value[0])
@@ -575,10 +560,6 @@ tr:hover .mini {
   gap: 14px;
   min-height: 0;
 }
-.api > .col {
-  overflow-y: auto;
-  scrollbar-width: thin;
-}
 .sys {
   padding: 14px;
   display: flex;
@@ -697,8 +678,8 @@ code {
   text-overflow: ellipsis;
 }
 .log {
-  flex: 1 0 auto;
-  min-height: 190px;
+  flex: 1;
+  min-height: 120px;
   padding: 14px;
   display: flex;
   flex-direction: column;
